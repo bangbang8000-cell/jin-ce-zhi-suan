@@ -7758,6 +7758,10 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                             <span>刷新状态</span>
                         </button>
                     </div>
+                    <label class="inline-flex items-center gap-2 text-[10px] text-amber-200 bg-amber-950/20 border border-amber-800/40 rounded px-2 py-1">
+                        <input id="history-sync-ignore-checkpoint-toggle" type="checkbox" class="accent-amber-500">
+                        <span>忽略检查点（强制重跑）</span>
+                    </label>
                     <div class="text-[10px] text-slate-400">同步范围由 history_sync 配置项控制；定时同步每日从 history_sync.scheduler_start_time 开始执行。</div>
                     <div id="history-sync-risk-hints" class="text-[10px] text-amber-200 bg-amber-950/30 border border-amber-800/40 rounded p-2 leading-5">
                         正在读取风险提示...
@@ -14321,6 +14325,8 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 const maxCodes = Number(getByPath(cfg, 'history_sync.max_codes', 10000) || 10000);
                 const batchSize = Number(getByPath(cfg, 'history_sync.batch_size', 500) || 500);
                 const dryRun = Boolean(getByPath(cfg, 'history_sync.dry_run', false));
+                const ignoreCheckpointNode = document.getElementById('history-sync-ignore-checkpoint-toggle');
+                const ignoreCheckpoint = Boolean(ignoreCheckpointNode && ignoreCheckpointNode.checked);
                 const tablesCfg = getByPath(cfg, 'history_sync.tables', DEFAULT_HISTORY_SYNC_TABLES);
                 const tables = normalizeHistorySyncTables(tablesCfg);
                 const risk = getHistorySyncRiskItems(cfg);
@@ -14342,6 +14348,7 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     provider_source: providerSource,
                     write_mode: writeMode,
                     direct_db_source: directDbSource,
+                    ignore_checkpoint: ignoreCheckpoint,
                     config: cfg,
                     async_run: false
                 };

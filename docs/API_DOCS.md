@@ -503,3 +503,96 @@ curl -X POST http://localhost:8000/api/control/stop
   }
 }
 ```
+
+---
+
+## 10. 历史增量同步（History Sync）
+
+用于按指定时间范围或回看窗口执行历史行情增量同步，支持写入 API 或直连目标数据库。
+
+### 10.1 手动触发增量同步
+
+- **接口地址:** `/api/history_sync/run`
+- **请求方法:** `POST`
+- **Content-Type:** `application/json`
+
+**请求参数 (JSON):**
+
+| 参数名 | 类型 | 必填 | 说明 | 示例值 |
+| :--- | :--- | :--- | :--- | :--- |
+| `provider_source` | string | 否 | 拉取源，常见为 `default/tushare/tdx/duckdb` | `"tdx"` |
+| `write_mode` | string | 否 | 写入模式，支持 `api` 或 `direct_db` | `"direct_db"` |
+| `direct_db_source` | string | 否 | 当 `write_mode=direct_db` 时的目标数据库类型 | `"duckdb"` |
+| `tables` | string[] | 否 | 需要同步的表，未传时使用系统默认值 | `["dat_1mins","dat_day"]` |
+| `time_mode` | string | 否 | 时间模式，支持 `lookback/custom` | `"custom"` |
+| `custom_start_time` | string | 否 | 自定义开始时间，格式 `YYYY-MM-DD HH:MM:SS` | `"2026-03-02 09:30:00"` |
+| `custom_end_time` | string | 否 | 自定义结束时间，格式 `YYYY-MM-DD HH:MM:SS` | `"2026-03-02 15:00:00"` |
+| `lookback_days` | int | 否 | 回看天数，`time_mode=lookback` 时生效 | `10` |
+| `session_only` | boolean | 否 | 是否仅保留交易时段数据 | `true` |
+| `intraday_mode` | boolean | 否 | 是否启用盘中窗口模式 | `false` |
+| `concurrency` | int | 否 | 按股票任务维度的并发数 | `10` |
+| `max_codes` | int | 否 | 本轮最大股票数 | `10000` |
+| `batch_size` | int | 否 | 批量写入条数 | `500` |
+| `dry_run` | boolean | 否 | 是否仅预演不落库 | `false` |
+| `resume_from_checkpoint` | boolean | 否 | 是否从同签名 checkpoint 恢复 | `true` |
+| `ignore_checkpoint` | boolean | 否 | 是否忽略旧 checkpoint 并强制重跑，默认 `false` | `true` |
+| `async_run` | boolean | 否 | 是否异步启动任务 | `false` |
+
+**请求示例：常规执行**
+
+```json
+{
+  "provider_source": "tdx",
+  "write_mode": "direct_db",
+  "direct_db_source": "duckdb",
+  "tables": ["dat_1mins", "dat_day"],
+  "time_mode": "custom",
+  "custom_start_time": "2026-03-02 09:30:00",
+  "custom_end_time": "2026-03-02 15:00:00",
+  "session_only": true,
+  "concurrency": 10,
+  "dry_run": false
+}
+```
+
+**请求示例：忽略检查点并强制重跑**
+
+```json
+{
+  "provider_source": "tdx",
+  "write_mode": "direct_db",
+  "direct_db_source": "duckdb",
+  "tables": ["dat_1mins", "dat_day"],
+  "time_mode": "custom",
+  "custom_start_time": "2026-03-02 09:30:00",
+  "custom_end_time": "2026-03-02 15:00:00",
+  "session_only": true,
+  "ignore_checkpoint": true
+}
+```
+
+**参数说明补充：**
+
+- `resume_from_checkpoint=true` 且 `ignore_checkpoint=false` 时，会复用相同任务签名的 checkpoint，并跳过已完成股票。
+- `ignore_checkpoint=true` 时，会忽略旧 checkpoint，按当前请求参数重新执行本轮同步范围。
+- `ignore_checkpoint` 只影响本次执行，不会修改全局配置默认值。
+
+**响应示例：**
+
+```json
+{
+  "status": "success",
+  "msg": "history sync finished",
+  "report": {
+    "provider_source": "tdx",
+    "write_mode": "direct_db",
+    "direct_db_source": "duckdb",
+    "resolved_codes_total": 5513,
+    "codes_total": 5513,
+    "checkpoint_skipped_codes": 0,
+    "ignore_checkpoint": true,
+    "total_missing_rows": 1200,
+    "total_written_rows": 1200
+  }
+}
+```

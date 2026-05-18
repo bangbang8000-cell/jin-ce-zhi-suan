@@ -3753,6 +3753,7 @@ class HistorySyncRunRequest(BaseModel):
     direct_db_source: Optional[str] = None
     duckdb_writer_enabled: Optional[bool] = None
     resume_from_checkpoint: Optional[bool] = None
+    ignore_checkpoint: Optional[bool] = None
     duckdb_writer_batch_rows: Optional[int] = None
     duckdb_writer_batch_codes: Optional[int] = None
     duckdb_writer_wait_ms: Optional[int] = None
@@ -10286,6 +10287,7 @@ def _history_sync_payload_from_request(req: HistorySyncRunRequest):
         "direct_db_source": str(req.direct_db_source or cfg.get("history_sync.direct_db_source", "mysql") or "mysql"),
         "duckdb_writer_enabled": bool(req.duckdb_writer_enabled) if req.duckdb_writer_enabled is not None else bool(cfg.get("history_sync.duckdb_writer_enabled", True)),
         "resume_from_checkpoint": bool(req.resume_from_checkpoint) if req.resume_from_checkpoint is not None else bool(cfg.get("history_sync.resume_from_checkpoint", True)),
+        "ignore_checkpoint": bool(req.ignore_checkpoint) if req.ignore_checkpoint is not None else bool(cfg.get("history_sync.ignore_checkpoint", False)),
         "duckdb_writer_batch_rows": max(1, int(req.duckdb_writer_batch_rows or cfg.get("history_sync.duckdb_writer_batch_rows", 3000) or 3000)),
         "duckdb_writer_batch_codes": max(1, int(req.duckdb_writer_batch_codes or cfg.get("history_sync.duckdb_writer_batch_codes", 8) or 8)),
         "duckdb_writer_wait_ms": max(1, int(req.duckdb_writer_wait_ms or cfg.get("history_sync.duckdb_writer_wait_ms", 800) or 800)),
