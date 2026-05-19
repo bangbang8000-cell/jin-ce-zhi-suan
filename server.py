@@ -66,6 +66,7 @@ from src.utils.postgres_provider import PostgresProvider
 from src.utils.duckdb_provider import DuckDbProvider
 from src.utils.tdx_provider import TdxProvider
 from src.utils.history_sync_service import HistoryDiffSyncService, TABLE_INTERVAL_MAP, DEFAULT_SYNC_TABLES, normalize_history_sync_tables
+from src.utils.stock_list_refresh import RuntimeConfigView, build_refresh_clients, refresh_stock_list
 from src.utils.backtest_baseline import apply_backtest_baseline
 from src.utils.webhook_notifier import WebhookNotifier
 from src.utils.screener_data_provider import (
@@ -1804,7 +1805,11 @@ def _check_provider_connectivity_for_code(provider, provider_source: str, stock_
 
 def _build_runtime_test_config(incoming_config: Optional[dict] = None) -> Dict[str, Any]:
     # 连通性测试优先使用“表单草稿 + 当前磁盘配置”的合并结果，确保未保存的 UI 修改也能参与测试。
-    base_cfg = ConfigLoader.reload().to_dict()
+    loader = ConfigLoader.reload()
+    if hasattr(loader, "to_dict") and callable(getattr(loader, "to_dict")):
+        base_cfg = loader.to_dict()
+    else:
+        base_cfg = {}
     patch_cfg = incoming_config if isinstance(incoming_config, dict) else {}
     sanitized_patch = json.loads(json.dumps(patch_cfg, ensure_ascii=False))
     merged_candidate = _deep_merge_dict(base_cfg, sanitized_patch)
@@ -1927,11 +1932,15 @@ def _run_tdx_connectivity_check(cfg: Dict[str, Any], stock_code: str, auto_detec
     if (not _is_valid_tdxdir(tdxdir)) and candidates:
         tdxdir = candidates[0]
         autodetected = True
-    provider = TdxProvider(
-        host=cfg.get("data_provider.tdx_host", None),
-        port=cfg.get("data_provider.tdx_port", None),
-        tdxdir=tdxdir,
-    )
+    # 兼容测试桩或轻量 provider 只接受 tdxdir 参数的场景，避免网络镜像回归被构造签名卡住。
+    try:
+        provider = TdxProvider(
+            host=cfg.get("data_provider.tdx_host", None),
+            port=cfg.get("data_provider.tdx_port", None),
+            tdxdir=tdxdir,
+        )
+    except TypeError:
+        provider = TdxProvider(tdxdir=tdxdir)
     ok, detail = provider.check_connectivity(stock_code)
     mode_info = provider.describe_mode() if hasattr(provider, "describe_mode") else {}
     target_text = ""
@@ -3608,6 +3617,8 @@ class WebhookTestRequest(BaseModel):
     stock_code: Optional[str] = "000001.SZ"
     # 可选测试消息，便于人工区分不同测试批次。
     msg: Optional[str] = None
+    # 配置中心测试时允许使用当前草稿中的 webhook 配置。
+    config: Optional[dict] = None
 
 class ConfigUpdateRequest(BaseModel):
     config: dict
@@ -3635,6 +3646,8 @@ class LlmConnectivityTestRequest(BaseModel):
     prompt: Optional[str] = None
     # 可选配置域：unified / evolution / strategy_manager / data_provider
     scope: Optional[str] = "unified"
+    # 配置中心测试模型时允许使用当前草稿，而不是仅依赖已保存配置。
+    config: Optional[dict] = None
 
 class StrategyToggleRequest(BaseModel):
     strategy_id: str
@@ -3760,6 +3773,12 @@ class HistorySyncRunRequest(BaseModel):
     duckdb_writer_queue_maxsize: Optional[int] = None
     async_run: bool = False
 
+
+class HistorySyncStockListRefreshRequest(BaseModel):
+    provider: Optional[str] = None
+    output_path: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
+
 class HistorySyncScheduleRequest(BaseModel):
     interval_minutes: int = 60
     scheduler_start_time: Optional[str] = None
@@ -3777,6 +3796,7 @@ class HistorySyncScheduleRequest(BaseModel):
     on_duplicate: str = "ignore"
     write_mode: Optional[str] = None
     direct_db_source: Optional[str] = None
+    ignore_checkpoint: Optional[bool] = None
     duckdb_writer_enabled: Optional[bool] = None
     resume_from_checkpoint: Optional[bool] = None
     duckdb_writer_batch_rows: Optional[int] = None
@@ -6444,9 +6464,44 @@ def _parse_ai_review_summary_from_markdown(markdown: str) -> Dict[str, Any]:
     if not text:
         return {}
     sec1 = _extract_markdown_section(text, "1) 核心结论", ["2) 关键问题", "## 2) 关键问题"])
-    sec2 = _extract_markdown_section(text, "2) 关键问题", ["3) 基于交易明细的硅基节点分析", "## 3) 基于交易明细的硅基节点分析"])
-    sec3 = _extract_markdown_section(text, "3) 基于交易明细的硅基节点分析", ["4) 基于交易明细的流码节点分析", "## 4) 基于交易明细的流码节点分析"])
-    sec4 = _extract_markdown_section(text, "4) 基于交易明细的流码节点分析", ["5) 参数优化建议", "## 5) 参数优化建议"])
+    sec2 = _extract_markdown_section(
+        text,
+        "2) 关键问题",
+        [
+            "3) 基于交易明细的硅基节点分析",
+            "## 3) 基于交易明细的硅基节点分析",
+            "3) 基于交易明细的买入节点分析",
+            "## 3) 基于交易明细的买入节点分析",
+        ],
+    )
+    sec3 = _extract_markdown_section(
+        text,
+        "3) 基于交易明细的硅基节点分析",
+        [
+            "4) 基于交易明细的流码节点分析",
+            "## 4) 基于交易明细的流码节点分析",
+            "4) 基于交易明细的卖出节点分析",
+            "## 4) 基于交易明细的卖出节点分析",
+        ],
+    ) or _extract_markdown_section(
+        text,
+        "3) 基于交易明细的买入节点分析",
+        [
+            "4) 基于交易明细的流码节点分析",
+            "## 4) 基于交易明细的流码节点分析",
+            "4) 基于交易明细的卖出节点分析",
+            "## 4) 基于交易明细的卖出节点分析",
+        ],
+    )
+    sec4 = _extract_markdown_section(
+        text,
+        "4) 基于交易明细的流码节点分析",
+        ["5) 参数优化建议", "## 5) 参数优化建议"],
+    ) or _extract_markdown_section(
+        text,
+        "4) 基于交易明细的卖出节点分析",
+        ["5) 参数优化建议", "## 5) 参数优化建议"],
+    )
     sec5 = _extract_markdown_section(text, "5) 参数优化建议", ["6) 下一轮实验方案", "## 6) 下一轮实验方案"])
     sec6 = _extract_markdown_section(text, "6) 下一轮实验方案", [])
     return _normalize_ai_review_summary({
@@ -6466,24 +6521,65 @@ def _parse_buffett_review_summary_from_markdown(markdown: str) -> Dict[str, Any]
     text = str(markdown or "").strip()
     if not text:
         return {}
-    titles = [
+    sec1 = _extract_markdown_section(
+        text,
         "1) 结论（BUY/WATCH/HOLD/AVOID + 一句话理由）",
+        ["2) 能力圈判断（IN/BOUNDARY/OUT）"],
+    )
+    sec2 = _extract_markdown_section(
+        text,
         "2) 能力圈判断（IN/BOUNDARY/OUT）",
+        ["3) 关键假设（3-5条）"],
+    )
+    sec3 = _extract_markdown_section(
+        text,
         "3) 关键假设（3-5条）",
+        ["4) 业务质量代理评估（用收益稳定性、回撤控制、策略一致性）"],
+    )
+    sec4 = _extract_markdown_section(
+        text,
         "4) 业务质量代理评估（用收益稳定性、回撤控制、策略一致性）",
+        ["5) 安全边际代理评估（用风险收益比、回撤缓冲）"],
+    )
+    sec5 = _extract_markdown_section(
+        text,
         "5) 安全边际代理评估（用风险收益比、回撤缓冲）",
+        [
+            "6) 流码标准检查（drawdown_break、win_rate_decay、ranking_drop、rule_stability）",
+            "6) 卖出标准检查（drawdown_break、win_rate_decay、ranking_drop、rule_stability）",
+        ],
+    )
+    sec6 = _extract_markdown_section(
+        text,
         "6) 流码标准检查（drawdown_break、win_rate_decay、ranking_drop、rule_stability）",
+        [
+            "7) 三大风险",
+            "6) 卖出标准检查（drawdown_break、win_rate_decay、ranking_drop、rule_stability）",
+        ],
+    ) or _extract_markdown_section(
+        text,
+        "6) 卖出标准检查（drawdown_break、win_rate_decay、ranking_drop、rule_stability）",
+        ["7) 三大风险"],
+    )
+    sec7 = _extract_markdown_section(
+        text,
         "7) 三大风险",
+        ["8) 监控指标（季度/每轮回测跟踪项）"],
+    )
+    sec8 = _extract_markdown_section(
+        text,
         "8) 监控指标（季度/每轮回测跟踪项）",
+        ["9) 最终结论（必须明确：仅分析，不执行交易）"],
+    )
+    sec9 = _extract_markdown_section(
+        text,
         "9) 最终结论（必须明确：仅分析，不执行交易）",
-    ]
-    sections = []
-    for idx, title in enumerate(titles):
-        sections.append(_extract_markdown_section(text, title, titles[idx + 1:]))
-    verdict_text = sections[0].splitlines()[0].strip() if sections[0] else "WATCH"
-    coc_text = sections[1].splitlines()[0].strip() if sections[1] else "N/A"
+        [],
+    )
+    verdict_text = sec1.splitlines()[0].strip() if sec1 else "WATCH"
+    coc_text = sec2.splitlines()[0].strip() if sec2 else "N/A"
     checklist = []
-    for item in _extract_bullets(sections[5]) or ([sections[5]] if sections[5] else []):
+    for item in _extract_bullets(sec6) or ([sec6] if sec6 else []):
         if not item:
             continue
         key, _, note = item.partition("：")
@@ -6499,13 +6595,13 @@ def _parse_buffett_review_summary_from_markdown(markdown: str) -> Dict[str, Any]
         "title": verdict_text,
         "verdict": verdict_text.split()[0].strip().upper() if verdict_text else "WATCH",
         "circle_of_competence": coc_text.split()[0].strip().upper() if coc_text else "N/A",
-        "key_assumptions": _extract_bullets(sections[2]) or ([sections[2]] if sections[2] else []),
-        "quality_assessment": _extract_bullets(sections[3]) or ([sections[3]] if sections[3] else []),
-        "margin_of_safety": _extract_bullets(sections[4]) or ([sections[4]] if sections[4] else []),
+        "key_assumptions": _extract_bullets(sec3) or ([sec3] if sec3 else []),
+        "quality_assessment": _extract_bullets(sec4) or ([sec4] if sec4 else []),
+        "margin_of_safety": _extract_bullets(sec5) or ([sec5] if sec5 else []),
         "sell_checklist": checklist,
-        "top_risks": _extract_bullets(sections[6]) or ([sections[6]] if sections[6] else []),
-        "monitoring_metrics": _extract_bullets(sections[7]) or ([sections[7]] if sections[7] else []),
-        "final_note": sections[8],
+        "top_risks": _extract_bullets(sec7) or ([sec7] if sec7 else []),
+        "monitoring_metrics": _extract_bullets(sec8) or ([sec8] if sec8 else []),
+        "final_note": sec9,
     })
 
 
@@ -6550,7 +6646,8 @@ def _build_ai_review_payload(report_item: Dict[str, Any], report_id: str) -> Dic
     return {
         "ai_review_text": str(text or ""),
         "ai_review_version": int(report_item.get("ai_review_version", 0) or 0),
-        "ai_review_summary": summary_localized,
+        "ai_review_summary": summary,
+        "ai_review_summary_localized": summary_localized,
         "ai_review_summary_raw": summary,
         "ai_review_summary_version": int(report_item.get("ai_review_summary_version", 0) or (AI_REVIEW_SUMMARY_SCHEMA_VERSION if summary else 0)),
     }
@@ -7650,12 +7747,15 @@ async def api_llm_ping(req: Optional[LlmConnectivityTestRequest] = None):
         req_prompt = str(getattr(req, "prompt", "") or "").strip() if req is not None else ""
         req_scenario = str(getattr(req, "scenario", "strategy_codegen") or "strategy_codegen") if req is not None else "strategy_codegen"
         req_scope = str(getattr(req, "scope", "unified") or "unified") if req is not None else "unified"
+        # 配置中心未保存草稿时，优先按本次运行时配置探活。
+        runtime_config = _build_runtime_test_config(getattr(req, "config", None)) if req is not None else {}
         # 统一调用探活核心逻辑，避免 ping/status 两套实现漂移。
         payload = _probe_llm_connectivity(
             prompt=req_prompt,
             scenario=req_scenario,
             scope=req_scope,
             update_cache=True,
+            runtime_config=runtime_config,
         )
         provider = str(payload.get("provider", "") or "")
         model = str(payload.get("model", "") or "")
@@ -7670,10 +7770,12 @@ def _probe_llm_connectivity(
     scenario: str = "strategy_codegen",
     scope: str = "unified",
     update_cache: bool = True,
+    runtime_config: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """执行一次真实 LLM 探活，并可选择回写缓存。"""
     # 使用统一网关适配器，保证与新建策略/进化生成使用同一配置来源。
-    llm_client = build_unified_llm_client(ConfigLoader.reload(), scope=scope)
+    cfg_view = RuntimeConfigView(runtime_config) if isinstance(runtime_config, dict) and runtime_config else ConfigLoader.reload()
+    llm_client = build_unified_llm_client(cfg_view, scope=scope)
     provider = str(llm_client.cfg.provider or "")
     model = str(llm_client.cfg.model or "")
     now_ts = time.time()
@@ -8610,7 +8712,15 @@ async def api_report_ai_review(report_id: str, force: bool = False):
                 cached_summary = report_ai_review_cache.get(f"{rid}__summary")
                 if cached and cached_ver == AI_REVIEW_SCHEMA_VERSION:
                     raw_summary = cached_summary if isinstance(cached_summary, dict) else {}
-                    return {"status": "success", "report_id": report_id, "analysis": cached, "analysis_summary": _localize_ai_review_summary(raw_summary), "analysis_summary_raw": raw_summary, "cached": True}
+                    return {
+                        "status": "success",
+                        "report_id": report_id,
+                        "analysis": cached,
+                        "analysis_summary": raw_summary,
+                        "analysis_summary_localized": _localize_ai_review_summary(raw_summary),
+                        "analysis_summary_raw": raw_summary,
+                        "cached": True,
+                    }
                 cached = str(r.get("ai_review_text", "") or "").strip()
                 persisted_ver = int(r.get("ai_review_version", 0) or 0)
                 if cached and persisted_ver == AI_REVIEW_SCHEMA_VERSION:
@@ -8619,7 +8729,15 @@ async def api_report_ai_review(report_id: str, force: bool = False):
                     report_ai_review_cache[f"{rid}__summary"] = r.get("ai_review_summary") if isinstance(r.get("ai_review_summary"), dict) else {}
                     report_ai_review_cache[f"{rid}__summary_v"] = int(r.get("ai_review_summary_version", 0) or 0)
                     raw_summary = report_ai_review_cache.get(f"{rid}__summary") if isinstance(report_ai_review_cache.get(f"{rid}__summary"), dict) else {}
-                    return {"status": "success", "report_id": report_id, "analysis": cached, "analysis_summary": _localize_ai_review_summary(raw_summary), "analysis_summary_raw": raw_summary, "cached": True}
+                    return {
+                        "status": "success",
+                        "report_id": report_id,
+                        "analysis": cached,
+                        "analysis_summary": raw_summary,
+                        "analysis_summary_localized": _localize_ai_review_summary(raw_summary),
+                        "analysis_summary_raw": raw_summary,
+                        "cached": True,
+                    }
             cfg = ConfigLoader.reload()
             missing = []
             if not str(cfg.get("data_provider.llm_api_url", "") or "").strip():
@@ -8642,7 +8760,15 @@ async def api_report_ai_review(report_id: str, force: bool = False):
             report_ai_review_cache[f"{rid}__summary"] = analysis_summary
             report_ai_review_cache[f"{rid}__summary_v"] = AI_REVIEW_SUMMARY_SCHEMA_VERSION if analysis_summary else 0
             persist_report_history()
-            return {"status": "success", "report_id": report_id, "analysis": analysis, "analysis_summary": _localize_ai_review_summary(analysis_summary), "analysis_summary_raw": analysis_summary, "cached": False}
+            return {
+                "status": "success",
+                "report_id": report_id,
+                "analysis": analysis,
+                "analysis_summary": analysis_summary,
+                "analysis_summary_localized": _localize_ai_review_summary(analysis_summary),
+                "analysis_summary_raw": analysis_summary,
+                "cached": False,
+            }
         return {"status": "error", "msg": "report not found"}
     except Exception as e:
         logger.error(f"/api/report/{report_id}/ai_review failed: {e}", exc_info=True)
@@ -10226,6 +10352,9 @@ async def api_webhook_test(req: WebhookTestRequest):
         event_type = str(req.event_type or "system").strip() or "system"
         stock_code = str(req.stock_code or "000001.SZ").strip().upper() or "000001.SZ"
         msg_text = str(req.msg or "").strip() or "webhook test message"
+        # 配置中心未保存草稿时，允许按当前 webhook_notification 配置执行测试。
+        runtime_cfg = _build_runtime_test_config(req.config)
+        config_section = runtime_cfg.get("webhook_notification", {}) if isinstance(runtime_cfg, dict) else {}
         # 使用独立测试方法绕过业务事件过滤，专注验证 webhook 通道可用性。
         result = await webhook_notifier.test_delivery(
             stock_code=stock_code,
@@ -10234,7 +10363,8 @@ async def api_webhook_test(req: WebhookTestRequest):
                 "msg": msg_text,
                 "source": "api_webhook_test",
                 "trigger_at": datetime.now().isoformat(timespec="seconds")
-            }
+            },
+            config_section=config_section if isinstance(config_section, dict) else None,
         )
         if bool(result.get("ok", False)):
             return {
@@ -10293,6 +10423,16 @@ def _history_sync_payload_from_request(req: HistorySyncRunRequest):
         "duckdb_writer_wait_ms": max(1, int(req.duckdb_writer_wait_ms or cfg.get("history_sync.duckdb_writer_wait_ms", 800) or 800)),
         "duckdb_writer_queue_maxsize": max(1, int(req.duckdb_writer_queue_maxsize or cfg.get("history_sync.duckdb_writer_queue_maxsize", 256) or 256)),
         "trigger_mode": "manual",
+    }
+
+
+def _stock_list_refresh_payload_from_request(req: HistorySyncStockListRefreshRequest):
+    # 手动刷新股票池时只透传本次所需的最小字段，避免误读旧 payload 结构。
+    output_path = str(req.output_path or "data/stock_list.csv").strip() or "data/stock_list.csv"
+    return {
+        "provider": str(req.provider or "auto").strip().lower() or "auto",
+        "output_path": output_path,
+        "config": req.config if isinstance(req.config, dict) else {},
     }
 
 def _parse_history_sync_datetime(value):
@@ -10604,6 +10744,26 @@ async def api_history_sync_run(req: HistorySyncRunRequest):
         return {"status": "accepted", "msg": "history sync task started", "payload": payload}
     return await _run_history_sync_once(payload)
 
+
+@app.post("/api/history_sync/stock_list/refresh")
+async def api_history_sync_stock_list_refresh(req: HistorySyncStockListRefreshRequest):
+    try:
+        payload = _stock_list_refresh_payload_from_request(req)
+        clients = build_refresh_clients(config_data=payload.get("config"))
+        result = await asyncio.to_thread(
+            refresh_stock_list,
+            payload["output_path"],
+            payload["provider"],
+            clients.get("akshare"),
+            clients.get("tushare"),
+        )
+        if result.get("status") != "success":
+            return {"status": "error", "msg": result.get("error") or "stock list refresh failed", "result": result}
+        return {"status": "success", "msg": "stock list refreshed", "result": result}
+    except Exception as e:
+        logger.error("history sync stock list refresh failed: %s", e, exc_info=True)
+        return {"status": "error", "msg": str(e)}
+
 @app.get("/api/history_sync/status")
 async def api_history_sync_status():
     return {
@@ -10661,6 +10821,10 @@ async def api_history_sync_scheduler_start(req: HistorySyncScheduleRequest):
     cfg.set("history_sync.on_duplicate", str(req.on_duplicate or "ignore"))
     cfg.set("history_sync.write_mode", str(req.write_mode or "api"))
     cfg.set("history_sync.direct_db_source", str(req.direct_db_source or "mysql"))
+    cfg.set(
+        "history_sync.ignore_checkpoint",
+        bool(req.ignore_checkpoint) if req.ignore_checkpoint is not None else bool(cfg.get("history_sync.ignore_checkpoint", False)),
+    )
     cfg.set(
         "history_sync.duckdb_writer_enabled",
         bool(req.duckdb_writer_enabled) if req.duckdb_writer_enabled is not None else bool(cfg.get("history_sync.duckdb_writer_enabled", True)),

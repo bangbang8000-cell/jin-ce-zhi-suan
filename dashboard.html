@@ -6745,6 +6745,8 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     { path: 'history_sync.max_codes', label: '默认祖宗上限', type: 'number', min: 1, max: 50000, step: 1, slider: true },
                     { path: 'history_sync.batch_size', label: '默认分批条数', type: 'number', min: 1, max: 5000, step: 1, slider: true },
                     { path: 'history_sync.dry_run', label: '默认仅预演（不写库）', type: 'boolean', desc: '开启=只统计缺失与预计写入，不执行落库；关闭=真实写入数据库' },
+                    { path: 'history_sync.stock_list_provider', label: '股票池更新源', type: 'select', options: [{ value: 'auto', label: 'auto（AkShare优先，TuShare兜底）' }, { value: 'akshare', label: 'akshare' }, { value: 'tushare', label: 'tushare' }], desc: '手动更新股票池时生效；auto 会先尝试 AkShare，失败后回退 TuShare' },
+                    { path: 'history_sync.stock_list_output_path', label: '股票池输出路径', type: 'text', placeholder: '例如：data/stock_list.csv', desc: '手动更新股票池时生效；默认写入 data/stock_list.csv' },
                     { path: 'history_sync.duckdb_writer_enabled', label: '启用DuckDB单写线程', type: 'boolean', desc: '仅 direct_db + duckdb 生效；开启后由单独写线程小批量串行刷盘' },
                     { path: 'history_sync.resume_from_checkpoint', label: '从检查点恢复', type: 'boolean', desc: '仅 direct_db + duckdb 生效；失败后跳过已完成股票继续同步' },
                     { path: 'history_sync.duckdb_writer_batch_rows', label: 'DuckDB批量行数', type: 'number', min: 1, max: 50000, step: 1, slider: true },
@@ -7745,6 +7747,10 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                             <i id="history-sync-run-icon" class="fa-solid fa-database"></i>
                             <span id="history-sync-run-label">增量同步</span>
                         </button>
+                        <button id="history-sync-refresh-stock-list-btn" onclick="runHistorySyncStockListRefresh()" class="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-1.5 rounded text-xs border border-cyan-500">
+                            <i id="history-sync-refresh-stock-list-icon" class="fa-solid fa-list-check"></i>
+                            <span id="history-sync-refresh-stock-list-label">更新股票池</span>
+                        </button>
                         <button id="history-sync-stop-btn" onclick="stopHistorySync()" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded text-xs border border-slate-500">
                             <i id="history-sync-stop-icon" class="fa-solid fa-stop"></i>
                             <span id="history-sync-stop-label">停止同步</span>
@@ -7768,6 +7774,9 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     </div>
                     <div id="history-sync-runtime-metrics" class="text-[10px] text-cyan-100 bg-cyan-950/20 border border-cyan-900/50 rounded p-2 leading-5">
                         运行指标：暂无数据
+                    </div>
+                    <div id="history-sync-stock-list-refresh-status" class="text-[10px] text-slate-400 bg-slate-900/30 border border-slate-800/50 rounded p-2 leading-5">
+                        股票池更新状态：暂无执行记录
                     </div>
                 `;
                 body.appendChild(ops);
@@ -8106,6 +8115,108 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 setByPath(out, path, arr);
             });
             return out;
+        }
+
+        function getConfigDraftStrict() {
+            // 执行型按钮统一读取当前草稿，避免误用已保存配置。
+            const draft = collectConfigFromForm();
+            if (!draft || typeof draft !== 'object') {
+                throw new Error('无法读取当前草稿配置');
+            }
+            return draft;
+        }
+
+        function getMissingDraftPaths(draft, requiredPaths) {
+            // 严格模式下只接受当前表单中的有效值，不回退旧配置。
+            const missing = [];
+            (Array.isArray(requiredPaths) ? requiredPaths : []).forEach((path) => {
+                const value = getByPath(draft, path, undefined);
+                let empty = value === undefined || value === null;
+                if (!empty && typeof value === 'string') {
+                    empty = String(value || '').trim() === '';
+                }
+                if (!empty && Array.isArray(value)) {
+                    empty = value.length === 0;
+                }
+                if (empty) {
+                    missing.push(String(path || ''));
+                }
+            });
+            return missing;
+        }
+
+        function ensureDraftActionRequirements(actionLabel, draft, requiredPaths) {
+            // 必填项缺失时直接拦截，避免把错误留到后端或旧配置回退。
+            const missing = getMissingDraftPaths(draft, requiredPaths);
+            if (missing.length) {
+                throw new Error(`无法执行${String(actionLabel || '当前操作')}：缺少 ${missing.join('、')}`);
+            }
+        }
+
+        function getConfigCenterDraftActionRegistry() {
+            // 配置中心执行型按钮统一注册在这里，避免后续再次散落草稿读取逻辑。
+            return {
+                data_source_connectivity: {
+                    actionLabel: '数据源连通性测试',
+                    beforeLog: '使用当前草稿执行数据源连通性测试',
+                    requiredPaths: ['data_provider.source'],
+                },
+                llm_connectivity: {
+                    actionLabel: '模型连通性测试',
+                    beforeLog: '使用当前草稿执行模型连通性测试',
+                    getRequiredPaths: (_draft, context = {}) => {
+                        const scope = String(context.scope || 'unified');
+                        if (scope === 'evolution') {
+                            return ['evolution.llm.provider', 'evolution.llm.model'];
+                        }
+                        if (scope === 'strategy_manager') {
+                            return ['data_provider.strategy_llm_provider', 'data_provider.strategy_llm_model'];
+                        }
+                        return ['data_provider.llm_provider', 'data_provider.llm_model'];
+                    },
+                },
+                webhook_test: {
+                    actionLabel: 'Webhook 测试',
+                    beforeLog: '使用当前草稿执行 Webhook 测试',
+                    requiredPaths: ['webhook_notification.enabled'],
+                },
+                history_sync_scheduler_start: {
+                    actionLabel: '定时同步启动',
+                    beforeLog: '使用当前草稿执行定时同步启动',
+                    getRequiredPaths: (draft) => {
+                        const timeMode = String(getByPath(draft, 'history_sync.time_mode', 'lookback') || 'lookback');
+                        const paths = [
+                            'data_provider.source',
+                            'history_sync.write_mode',
+                            'history_sync.direct_db_source',
+                            'history_sync.interval_minutes',
+                            'history_sync.scheduler_start_time',
+                        ];
+                        if (timeMode === 'custom') {
+                            paths.push('history_sync.custom_start_time');
+                            paths.push('history_sync.custom_end_time');
+                        } else {
+                            paths.push('history_sync.lookback_days');
+                        }
+                        return paths;
+                    },
+                },
+            };
+        }
+
+        function runConfigCenterDraftAction(actionId, context = {}, draftOverride = null) {
+            // 配置中心统一严格草稿入口：只读当前表单，不回退已保存配置。
+            const registry = getConfigCenterDraftActionRegistry();
+            const action = registry[String(actionId || '')] || {};
+            const draft = (draftOverride && typeof draftOverride === 'object') ? draftOverride : getConfigDraftStrict();
+            const requiredPaths = (typeof action.getRequiredPaths === 'function')
+                ? action.getRequiredPaths(draft, context)
+                : (Array.isArray(action.requiredPaths) ? action.requiredPaths : []);
+            ensureDraftActionRequirements(action.actionLabel || '当前操作', draft, requiredPaths);
+            if (action.beforeLog) {
+                logMessage('SYSTEM', String(action.beforeLog || ''), 'info');
+            }
+            return { draft, action, requiredPaths };
         }
 
         function openConfigCenter() {
@@ -12826,13 +12937,13 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             const icon = document.getElementById('config-data-source-test-icon');
             const label = document.getElementById('config-data-source-test-label');
             const status = document.getElementById('config-data-source-test-status');
+            const draft = getConfigDraftStrict();
+            const meta = getSelectedDataSourceConnectivityMeta(draft, sourceOverride);
             const setStatus = (text, level = 'info') => {
                 if (!status) return;
                 status.innerText = String(text || '');
                 status.className = `text-[10px] ${level === 'ok' ? 'text-emerald-300' : (level === 'error' ? 'text-rose-300' : 'text-slate-400')}`;
             };
-            const parsed = collectConfigFromForm();
-            const meta = getSelectedDataSourceConnectivityMeta(parsed, sourceOverride);
             const originIconClass = String(meta.iconClass || 'fa-solid fa-plug-circle-check');
             const originLabel = String(meta.label || '测试数据源连通性');
             try {
@@ -12840,13 +12951,15 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
                 if (label) label.innerText = String(meta.busyLabel || '连通性校验中...');
                 setStatus(String(meta.pendingHint || '正在测试连接，请稍候...'), 'info');
-                const targets = Array.isArray(getByPath(parsed, 'targets', [])) ? getByPath(parsed, 'targets', []) : [];
+                const strictAction = runConfigCenterDraftAction('data_source_connectivity', {}, draft);
+                const cfg = strictAction.draft;
+                const targets = Array.isArray(getByPath(cfg, 'targets', [])) ? getByPath(cfg, 'targets', []) : [];
                 const stockCode = String((targets[0] || '000001.SZ')).trim().toUpperCase();
                 const payload = {
                     source: String(meta.source || 'default'),
                     stock_code: stockCode || '000001.SZ',
                     auto_detect: true,
-                    config: parsed
+                    config: cfg
                 };
                 const res = await fetch('/api/config/test_data_source_connectivity', {
                     method: 'POST',
@@ -12908,10 +13021,16 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
                 if (label) label.innerText = '测试中...';
                 setStatus('正在请求统一模型层探活...', 'info');
+                const strictAction = runConfigCenterDraftAction('llm_connectivity', { scope: scope });
+                const cfg = strictAction.draft;
                 const res = await fetch('/api/llm/ping', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ scenario: String(scenario || 'config_center'), scope: String(scope || 'unified') })
+                    body: JSON.stringify({
+                        scenario: String(scenario || 'config_center'),
+                        scope: String(scope || 'unified'),
+                        config: cfg
+                    })
                 });
                 const data = await res.json();
                 if (!res.ok || data.status !== 'success' || data.ok !== true) {
@@ -12968,14 +13087,16 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
                 if (label) label.innerText = '发送中...';
                 setStatus('正在发送测试消息，请稍候...', 'info');
-                const parsed = collectConfigFromForm();
+                const strictAction = runConfigCenterDraftAction('webhook_test');
+                const cfg = strictAction.draft;
                 // 优先使用目标池首个股票代码，便于消息带上上下文；没有则回退默认值。
-                const targets = Array.isArray(getByPath(parsed, 'targets', [])) ? getByPath(parsed, 'targets', []) : [];
+                const targets = Array.isArray(getByPath(cfg, 'targets', [])) ? getByPath(cfg, 'targets', []) : [];
                 const stockCode = String((targets[0] || '000001.SZ')).trim().toUpperCase() || '000001.SZ';
                 const payload = {
                     event_type: 'system',
                     stock_code: stockCode,
-                    msg: `配置中心测试消息 ${new Date().toLocaleString()}`
+                    msg: `配置中心测试消息 ${new Date().toLocaleString()}`,
+                    config: cfg
                 };
                 const res = await fetch('/api/webhook/test', {
                     method: 'POST',
@@ -14301,6 +14422,157 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             host.innerHTML = lines.map((text) => `<div>${text}</div>`).join('');
         }
 
+        // 股票池更新状态本地模型
+        var historySyncStockListRefreshState = {
+            status: 'idle',
+            message: '暂无执行记录',
+            hint: null,
+            started_at: null,
+            finished_at: null,
+            provider: null,
+            source: null,
+            codes: null,
+            output_path: null,
+        };
+
+        function renderHistorySyncStockListRefreshStatus() {
+            var host = document.getElementById('history-sync-stock-list-refresh-status');
+            if (!host) return;
+            var s = historySyncStockListRefreshState;
+            var statusColor = '';
+            var statusLabel = '';
+            switch (s.status) {
+                case 'idle':
+                    statusColor = 'text-slate-400';
+                    statusLabel = '未开始';
+                    break;
+                case 'running':
+                    statusColor = 'text-cyan-300';
+                    statusLabel = '更新中';
+                    break;
+                case 'success':
+                    statusColor = 'text-green-300';
+                    statusLabel = '更新成功';
+                    break;
+                case 'error':
+                    statusColor = 'text-red-300';
+                    statusLabel = '更新失败';
+                    break;
+                default:
+                    statusColor = 'text-slate-400';
+                    statusLabel = '未开始';
+            }
+            var fmt = function (v) { return v !== null && v !== undefined ? String(v) : '--'; };
+            var statusIcon = '';
+            if (s.status === 'running') statusIcon = '<i class="fa-solid fa-spinner fa-spin mr-1"></i>';
+            else if (s.status === 'success') statusIcon = '<i class="fa-solid fa-circle-check mr-1"></i>';
+            else if (s.status === 'error') statusIcon = '<i class="fa-solid fa-circle-xmark mr-1"></i>';
+
+            var borderColor = '';
+            var bgColor = '';
+            switch (s.status) {
+                case 'running':
+                    borderColor = 'border-cyan-800/50';
+                    bgColor = 'bg-cyan-950/20';
+                    break;
+                case 'success':
+                    borderColor = 'border-green-800/50';
+                    bgColor = 'bg-green-950/20';
+                    break;
+                case 'error':
+                    borderColor = 'border-red-800/50';
+                    bgColor = 'bg-red-950/20';
+                    break;
+                default:
+                    borderColor = 'border-slate-800/50';
+                    bgColor = 'bg-slate-900/30';
+            }
+            host.className = 'text-[10px] ' + statusColor + ' ' + bgColor + ' border ' + borderColor + ' rounded p-2 leading-5';
+            var mainMsg = s.message || '';
+            var row1 = statusIcon + statusLabel + (mainMsg ? '：' + escapeHistorySyncHintHtml(mainMsg) : '');
+            var row2 = '数据源：' + fmt(s.source) + ' · 股票数：' + fmt(s.codes);
+            var row3 = '输出路径：' + escapeHistorySyncHintHtml(fmt(s.output_path));
+            var row4 = '开始时间：' + fmt(s.started_at) + ' · 完成时间：' + fmt(s.finished_at);
+            var rows = [row1, row2, row3, row4];
+            if (s.status === 'error' && s.hint) {
+                rows.push('<div class="text-amber-300 mt-1"><i class="fa-solid fa-lightbulb mr-1"></i>' + escapeHistorySyncHintHtml(s.hint) + '</div>');
+            }
+            host.innerHTML = rows.map(function (t) { return '<div>' + t + '</div>'; }).join('');
+        }
+
+        async function runHistorySyncStockListRefresh() {
+            const btn = document.getElementById('history-sync-refresh-stock-list-btn');
+            const icon = document.getElementById('history-sync-refresh-stock-list-icon');
+            const label = document.getElementById('history-sync-refresh-stock-list-label');
+            const originLabel = label ? String(label.innerText || '') : '更新股票池';
+            try {
+                if (btn) btn.disabled = true;
+                if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
+                if (label) label.innerText = '更新中...';
+                const cfg = getConfigDraftStrict();
+                ensureDraftActionRequirements(
+                    '股票池更新',
+                    cfg,
+                    ['history_sync.stock_list_provider', 'history_sync.stock_list_output_path']
+                );
+                logMessage('SYSTEM', '使用当前草稿执行股票池更新', 'info');
+                const payload = {
+                    provider: String(getByPath(cfg, 'history_sync.stock_list_provider', 'auto') || 'auto').trim().toLowerCase() || 'auto',
+                    output_path: String(getByPath(cfg, 'history_sync.stock_list_output_path', 'data/stock_list.csv') || 'data/stock_list.csv').trim() || 'data/stock_list.csv',
+                    config: cfg,
+                };
+                const now = new Date();
+                historySyncStockListRefreshState.status = 'running';
+                historySyncStockListRefreshState.message = '正在更新股票池...';
+                historySyncStockListRefreshState.started_at = now.toLocaleString('zh-CN', { hour12: false });
+                historySyncStockListRefreshState.finished_at = null;
+                historySyncStockListRefreshState.provider = payload.provider;
+                historySyncStockListRefreshState.source = null;
+                historySyncStockListRefreshState.codes = null;
+                historySyncStockListRefreshState.output_path = payload.output_path;
+                renderHistorySyncStockListRefreshStatus();
+                const res = await fetch('/api/history_sync/stock_list/refresh', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok || String(data?.status || '') !== 'success') {
+                    throw new Error(data?.msg || '股票池更新失败');
+                }
+                const result = data && typeof data.result === 'object' ? data.result : {};
+                historySyncStockListRefreshState.status = 'success';
+                historySyncStockListRefreshState.message = '股票池更新完成';
+                historySyncStockListRefreshState.source = result.source || '--';
+                historySyncStockListRefreshState.codes = Number(result.codes || 0);
+                historySyncStockListRefreshState.output_path = result.output_path || payload.output_path;
+                historySyncStockListRefreshState.finished_at = new Date().toLocaleString('zh-CN', { hour12: false });
+                renderHistorySyncStockListRefreshStatus();
+                logMessage('SYSTEM', `股票池更新完成：source=${String(result.source || '--')} codes=${Number(result.codes || 0)}`, 'success');
+            } catch (e) {
+                const errMsg = String(e?.message || e || '未知错误');
+                historySyncStockListRefreshState.status = 'error';
+                historySyncStockListRefreshState.message = errMsg;
+                if (String(errMsg || '').indexOf('缺少') >= 0) {
+                    historySyncStockListRefreshState.hint = '请在配置中心「工部增量同步」区域填写 股票池更新源（推荐填 auto）和 股票池输出路径（默认 data/stock_list.csv），保存草稿后再次点击更新股票池。';
+                } else {
+                    historySyncStockListRefreshState.hint = null;
+                }
+                try {
+                    var cfg2 = getConfigDraftStrict();
+                    historySyncStockListRefreshState.provider = String(getByPath(cfg2, 'history_sync.stock_list_provider', '') || '').trim() || 'auto';
+                    historySyncStockListRefreshState.output_path = String(getByPath(cfg2, 'history_sync.stock_list_output_path', '') || '').trim() || 'data/stock_list.csv';
+                } catch (_) { /* 草稿不可读，保持 null */ }
+                historySyncStockListRefreshState.finished_at = new Date().toLocaleString('zh-CN', { hour12: false });
+                renderHistorySyncStockListRefreshStatus();
+                logMessage('SYSTEM', `股票池更新失败: ${errMsg}`, 'danger');
+            } finally {
+                if (btn) btn.disabled = false;
+                if (icon) icon.className = 'fa-solid fa-list-check';
+                if (label) label.innerText = originLabel;
+            }
+        }
+
         async function runHistorySync() {
             if (historySyncRunning) {
                 logMessage('SYSTEM', '增量同步任务已在运行中，请点击“停止同步”按钮中断', 'warning');
@@ -14310,8 +14582,7 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             historySyncStopRequested = false;
             renderHistorySyncButtons();
             try {
-                // 直接从表单收集当前草稿，确保用户未点击保存时也能按当前选择执行。
-                const cfg = collectConfigFromForm();
+                const cfg = getConfigDraftStrict();
                 const providerSource = String(getByPath(cfg, 'data_provider.source', 'default') || 'default');
                 const writeMode = String(getByPath(cfg, 'history_sync.write_mode', 'api') || 'api');
                 const directDbSource = String(getByPath(cfg, 'history_sync.direct_db_source', 'mysql') || 'mysql');
@@ -14330,6 +14601,19 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 const tablesCfg = getByPath(cfg, 'history_sync.tables', DEFAULT_HISTORY_SYNC_TABLES);
                 const tables = normalizeHistorySyncTables(tablesCfg);
                 const risk = getHistorySyncRiskItems(cfg);
+                const requiredPaths = [
+                    'data_provider.source',
+                    'history_sync.write_mode',
+                    'history_sync.direct_db_source',
+                ];
+                if (timeMode === 'custom') {
+                    requiredPaths.push('history_sync.custom_start_time');
+                    requiredPaths.push('history_sync.custom_end_time');
+                } else {
+                    requiredPaths.push('history_sync.lookback_days');
+                }
+                ensureDraftActionRequirements('增量同步', cfg, requiredPaths);
+                logMessage('SYSTEM', '使用当前草稿执行增量同步', 'info');
                 // 执行前再次打到前台系统日志，避免用户漏看配置区中的风险提示。
                 logMessage('SYSTEM', `增量同步风险提示：${risk.items.join('；')}`, 'warning');
                 const payload = {
@@ -14406,10 +14690,19 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             const nextOn = !historySyncSchedulerRunning;
             try {
                 if (nextOn) {
-                    const cfg = configDraft || {};
+                    const strictAction = runConfigCenterDraftAction('history_sync_scheduler_start');
+                    const cfg = strictAction.draft;
+                    const ignoreCheckpointNode = document.getElementById('history-sync-ignore-checkpoint-toggle');
+                    const ignoreCheckpoint = Boolean(ignoreCheckpointNode && ignoreCheckpointNode.checked);
                     const providerSource = String(getByPath(cfg, 'data_provider.source', 'default') || 'default');
                     const writeMode = String(getByPath(cfg, 'history_sync.write_mode', 'api') || 'api');
                     const directDbSource = String(getByPath(cfg, 'history_sync.direct_db_source', 'mysql') || 'mysql');
+                    const duckdbWriterEnabled = Boolean(getByPath(cfg, 'history_sync.duckdb_writer_enabled', true));
+                    const resumeFromCheckpoint = Boolean(getByPath(cfg, 'history_sync.resume_from_checkpoint', true));
+                    const duckdbWriterBatchRows = Number(getByPath(cfg, 'history_sync.duckdb_writer_batch_rows', 3000) || 3000);
+                    const duckdbWriterBatchCodes = Number(getByPath(cfg, 'history_sync.duckdb_writer_batch_codes', 8) || 8);
+                    const duckdbWriterWaitMs = Number(getByPath(cfg, 'history_sync.duckdb_writer_wait_ms', 800) || 800);
+                    const duckdbWriterQueueMaxsize = Number(getByPath(cfg, 'history_sync.duckdb_writer_queue_maxsize', 256) || 256);
                     const timeMode = String(getByPath(cfg, 'history_sync.time_mode', 'lookback') || 'lookback');
                     // 定时开启时间支持用户自定义，默认 09:30。
                     const schedulerStartTime = String(getByPath(cfg, 'history_sync.scheduler_start_time', '09:30') || '09:30').trim();
@@ -14448,7 +14741,14 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                             on_duplicate: 'ignore',
                             provider_source: providerSource,
                             write_mode: writeMode,
-                            direct_db_source: directDbSource
+                            direct_db_source: directDbSource,
+                            ignore_checkpoint: ignoreCheckpoint,
+                            duckdb_writer_enabled: duckdbWriterEnabled,
+                            resume_from_checkpoint: resumeFromCheckpoint,
+                            duckdb_writer_batch_rows: Math.max(1, Math.floor(duckdbWriterBatchRows)),
+                            duckdb_writer_batch_codes: Math.max(1, Math.floor(duckdbWriterBatchCodes)),
+                            duckdb_writer_wait_ms: Math.max(1, Math.floor(duckdbWriterWaitMs)),
+                            duckdb_writer_queue_maxsize: Math.max(1, Math.floor(duckdbWriterQueueMaxsize))
                         })
                     });
                     const data = await res.json();

@@ -805,9 +805,9 @@ class WebhookNotifier:
         # 返回通道响应，便于测试接口输出更详细的排障信息。
         return await asyncio.to_thread(self._post_json, url, payload, timeout_sec)
 
-    async def test_delivery(self, stock_code="000001.SZ", event_type="system", data=None):
-        # 读取最新配置（含私有配置覆盖）并组织测试任务。
-        cfg = self._load_cfg()
+    async def test_delivery(self, stock_code="000001.SZ", event_type="system", data=None, config_section=None):
+        # 配置中心测试允许显式传入当前草稿，否则继续读取已生效配置。
+        cfg = config_section if isinstance(config_section, dict) and config_section else self._load_cfg()
         if not bool(cfg.get("enabled", False)):
             return {
                 "ok": False,

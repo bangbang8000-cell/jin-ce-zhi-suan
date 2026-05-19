@@ -596,3 +596,55 @@ curl -X POST http://localhost:8000/api/control/stop
   }
 }
 ```
+
+### 10.2 手动刷新历史同步股票池
+
+- **接口地址:** `/api/history_sync/stock_list/refresh`
+- **请求方法:** `POST`
+- **Content-Type:** `application/json`
+- **用途:** 手动更新 `data/stock_list.csv`，供后续 `history_sync` 自动读取。
+
+**请求参数 (JSON):**
+
+| 参数名 | 类型 | 必填 | 说明 | 示例值 |
+| :--- | :--- | :--- | :--- | :--- |
+| `provider` | string | 否 | 数据源，支持 `auto/akshare/tushare` | `"auto"` |
+| `output_path` | string | 否 | 股票池 CSV 输出路径 | `"data/stock_list.csv"` |
+| `config` | object | 否 | 当前前端草稿配置；用于未保存配置时透传 `tushare_token` 等运行期字段 | `{"data_provider":{"tushare_token":"draft-token"}}` |
+
+**执行策略：**
+
+- `provider=auto` 时，优先尝试 `AkShare`
+- 若 `AkShare` 返回空结果、字段异常或请求失败，则自动回退 `TuShare`
+- 若双源都失败，不会覆盖已有 `stock_list.csv`
+
+**请求示例：**
+
+```json
+{
+  "provider": "auto",
+  "output_path": "data/stock_list.csv",
+  "config": {
+    "data_provider": {
+      "tushare_token": "draft-token"
+    }
+  }
+}
+```
+
+**响应示例：**
+
+```json
+{
+  "status": "success",
+  "msg": "stock list refreshed",
+  "result": {
+    "status": "success",
+    "source": "akshare",
+    "fallback_used": false,
+    "codes": 5513,
+    "output_path": "data/stock_list.csv",
+    "preserved_existing_file": false
+  }
+}
+```

@@ -128,7 +128,9 @@
     "duckdb_writer_batch_rows": 3000,
     "duckdb_writer_batch_codes": 8,
     "duckdb_writer_wait_ms": 800,
-    "duckdb_writer_queue_maxsize": 256
+    "duckdb_writer_queue_maxsize": 256,
+    "stock_list_provider": "auto",
+    "stock_list_output_path": "data/stock_list.csv"
   },
   "targets": [],
   "strategies": {
@@ -428,8 +430,8 @@
     "llm": {
       "enabled": true,
       "provider": "openai_compatible",
-      "model": "Qwen/Qwen3.6-35B-A3B",
-      "base_url": "https://api.siliconflow.cn/v1",
+      "model": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com",
       "timeout_seconds": 120,
       "retry_times": 1,
       "api_key": "",
