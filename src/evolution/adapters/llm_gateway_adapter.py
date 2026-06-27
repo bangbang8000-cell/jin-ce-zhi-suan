@@ -123,6 +123,25 @@ class UnifiedLLMConfig:
             model, model_source = _pick_path_value([
                 ("data_provider.strategy_llm_model", cfg.get("data_provider.strategy_llm_model", "")),
             ])
+        elif scope_norm == "screener":
+            # 条件筛选专用：使用非推理模型以保证结构化 JSON 输出的速度与稳定性。
+            # 缺省字段回退到 strategy_manager，保持与进化模块相同的密钥与地址入口。
+            provider, provider_source = _pick_path_value([
+                ("data_provider.screener_llm_provider", cfg.get("data_provider.screener_llm_provider", "")),
+                ("data_provider.strategy_llm_provider", cfg.get("data_provider.strategy_llm_provider", "")),
+            ], default="openai_compatible")
+            api_key, api_key_source = _pick_path_value([
+                ("data_provider.screener_llm_api_key", cfg.get("data_provider.screener_llm_api_key", "")),
+                ("data_provider.strategy_llm_api_key", cfg.get("data_provider.strategy_llm_api_key", "")),
+            ])
+            base_url, base_url_source = _pick_path_value([
+                ("data_provider.screener_llm_api_url", cfg.get("data_provider.screener_llm_api_url", "")),
+                ("data_provider.strategy_llm_api_url", cfg.get("data_provider.strategy_llm_api_url", "")),
+            ])
+            model, model_source = _pick_path_value([
+                ("data_provider.screener_llm_model", cfg.get("data_provider.screener_llm_model", "")),
+                ("data_provider.strategy_llm_model", cfg.get("data_provider.strategy_llm_model", "")),
+            ])
         elif scope_norm == "data_provider":
             provider, provider_source = _pick_path_value([
                 ("data_provider.llm_provider", cfg.get("data_provider.llm_provider", "")),
@@ -168,6 +187,7 @@ class UnifiedLLMConfig:
             ])
         timeout_seconds = int(
             cfg.get("evolution.llm.timeout_seconds", 0)
+            or (cfg.get("data_provider.screener_llm_timeout_sec", 0) if scope_norm == "screener" else 0)
             or cfg.get("data_provider.strategy_llm_timeout_sec", 0)
             or cfg.get("data_provider.llm_timeout_sec", 0)
             or 120
@@ -237,12 +257,18 @@ class UnifiedLLMClient:
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         # 统一重试逻辑，屏蔽不同 provider 的异常细节差异。
         last_error: Exception | None = None
         for _ in range(self.cfg.retry_times + 1):
             try:
-                content = self._complete_once(messages, temperature=temperature, max_tokens=max_tokens)
+                content = self._complete_once(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                )
                 self.last_call_meta = {
                     "provider": self.cfg.provider,
                     "model": self.cfg.model,
@@ -270,18 +296,24 @@ class UnifiedLLMClient:
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         if self.cfg.provider == "ollama":
             return self._complete_ollama(messages, temperature=temperature, max_tokens=max_tokens)
         if self.cfg.provider == "zhipu":
-            return self._complete_zhipu(messages, temperature=temperature, max_tokens=max_tokens)
-        return self._complete_openai_compatible(messages, temperature=temperature, max_tokens=max_tokens)
+            return self._complete_zhipu(
+                messages, temperature=temperature, max_tokens=max_tokens, response_format=response_format,
+            )
+        return self._complete_openai_compatible(
+            messages, temperature=temperature, max_tokens=max_tokens, response_format=response_format,
+        )
 
     def _complete_openai_compatible(
         self,
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         # 使用 urllib 保持与项目当前依赖一致，避免额外引入 SDK。
         url = self.cfg.base_url.rstrip("/")
@@ -296,6 +328,9 @@ class UnifiedLLMClient:
             "max_tokens": int(self.cfg.default_max_tokens if max_tokens is None else max_tokens),
             "messages": messages,
         }
+        # response_format 为可选：传 {"type": "json_object"} 可强制 JSON 输出，避免模型返回自然语言独白。
+        if response_format:
+            payload["response_format"] = response_format
         req = urllib.request.Request(
             url=url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -320,6 +355,7 @@ class UnifiedLLMClient:
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> str:
         # 只走代码生成与文本生成，不启用 thinking，避免高延迟。
         try:
@@ -327,13 +363,17 @@ class UnifiedLLMClient:
         except Exception as exc:
             raise RuntimeError(f"未安装 zhipuai 依赖: {exc}") from exc
         client = ZhipuAI(api_key=self.cfg.api_key)
-        response = client.chat.completions.create(
+        kwargs = dict(
             model=self.cfg.model,
             messages=messages,
             temperature=float(self.cfg.default_temperature if temperature is None else temperature),
             max_tokens=int(self.cfg.default_max_tokens if max_tokens is None else max_tokens),
             timeout=int(self.cfg.timeout_seconds),
         )
+        # 智谱对 JSON 模式的支持随模型版本变化；只有调用方显式指定时才透传。
+        if response_format:
+            kwargs["response_format"] = response_format
+        response = client.chat.completions.create(**kwargs)
         choices = getattr(response, "choices", None) or []
         if not choices:
             raise RuntimeError("zhipu 响应缺少 choices")

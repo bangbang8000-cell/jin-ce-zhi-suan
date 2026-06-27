@@ -346,7 +346,42 @@
             border-color: rgba(239, 68, 68, 0.78);
             background: rgba(77, 19, 19, 0.58);
         }
-        
+
+        /* Loading 遮罩阶段指示器样式 */
+        .screener-phase-step {
+            transition: all 0.3s ease;
+        }
+        .screener-phase-step.phase-active .screener-phase-circle {
+            border-color: #22d3ee;
+            background: rgba(8, 145, 178, 0.3);
+            color: #22d3ee;
+            box-shadow: 0 0 12px rgba(34, 211, 238, 0.5);
+            animation: screenerPhasePulse 1.2s ease-in-out infinite;
+        }
+        .screener-phase-step.phase-active .screener-phase-label {
+            color: #22d3ee;
+            font-weight: 600;
+        }
+        .screener-phase-step.phase-done .screener-phase-circle {
+            border-color: #10b981;
+            background: rgba(16, 185, 129, 0.2);
+            color: #10b981;
+        }
+        .screener-phase-step.phase-done .screener-phase-label {
+            color: #10b981;
+        }
+        .screener-phase-connector.connector-done {
+            background: #10b981;
+        }
+        .screener-phase-connector.connector-active {
+            background: linear-gradient(90deg, #10b981 0%, #22d3ee 100%);
+        }
+
+        @keyframes screenerPhasePulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
         .code-font {
             font-family: 'JetBrains Mono', monospace;
         }
@@ -1319,6 +1354,10 @@
                 <i id="live-toggle-icon" class="fa-solid fa-satellite-dish"></i>
                 <span id="live-toggle-label">启动近似实时</span>
             </button>
+            <button id="screener-entry-btn" onclick="openScreenerAIParser()" class="bg-emerald-700 hover:bg-emerald-600 text-white px-4 py-2 rounded font-bold text-sm transition-all shadow-[0_0_10px_rgba(16,185,129,0.3)] border border-emerald-500 min-w-[92px] lg:min-w-[108px]">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span>智能选股</span>
+            </button>
             <button id="backtest-trigger-btn" onclick="startBacktest()" class="bg-trading-blue hover:bg-blue-600 text-white px-4 py-2 rounded font-bold text-sm transition-all shadow-[0_0_10px_rgba(59,130,246,0.3)] border border-blue-500 min-w-[92px] lg:min-w-[108px]">
                 <i id="backtest-trigger-icon" class="fa-solid fa-play"></i>
                 <span id="backtest-trigger-label">单票回测</span>
@@ -1413,11 +1452,10 @@
                     <div id="ops-system-body" class="p-3 space-y-2">
                         <div class="text-[11px] text-slate-500">低频系统操作统一收纳，减少主界面干扰。</div>
                         <div class="flex items-center gap-2 flex-wrap">
-                            <button onclick="openFeatureFromHub('config')" class="bg-purple-700 hover:bg-purple-600 text-white px-3 py-2 rounded text-xs border border-purple-500">配置中心</button>
+                            <button onclick="openConfigCenter()" class="bg-purple-700 hover:bg-purple-600 text-white px-3 py-2 rounded text-xs border border-purple-500">配置中心</button>
                             <button onclick="openFeatureFromHub('webhook')" class="bg-amber-700 hover:bg-amber-600 text-white px-3 py-2 rounded text-xs border border-amber-500">推送补偿</button>
                             <button onclick="openFeatureFromHub('pattern')" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded text-xs border border-slate-500">经典形态</button>
                             <button onclick="openFeatureFromHub('evolution')" class="bg-cyan-700 hover:bg-cyan-600 text-white px-3 py-2 rounded text-xs border border-cyan-500">策略进化</button>
-                            <button onclick="openFeatureFromHub('screener')" class="bg-emerald-700 hover:bg-emerald-600 text-white px-3 py-2 rounded text-xs border border-emerald-500">条件筛选</button>
                         </div>
                     </div>
                 </div>
@@ -1912,7 +1950,55 @@
 
                 <!-- 右侧结果表格 -->
                 <div class="flex-1 flex flex-col overflow-hidden">
-                    <div class="flex-1 overflow-auto">
+                    <!-- 数据缺失告警面板：当筛选条件命中覆盖率不足的字段时，提示"为什么空结果"。 -->
+                    <div id="screener-unsupported-panel" class="hidden border-b border-amber-700/50 bg-amber-950/30 px-4 py-2 text-xs shrink-0">
+                        <div class="flex items-center justify-between">
+                            <div class="text-amber-300 font-bold"><i class="fa-solid fa-triangle-exclamation mr-1"></i><span id="screener-unsupported-title">部分条件未生效</span></div>
+                            <button onclick="document.getElementById('screener-unsupported-panel').classList.add('hidden')" class="text-amber-400/60 hover:text-amber-200 text-[11px]"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                        <ul id="screener-unsupported-list" class="mt-1.5 space-y-1 text-amber-100/90"></ul>
+                    </div>
+                    <div class="flex-1 overflow-auto relative" id="screener-table-container">
+                        <!-- Loading 遮罩：数据加载时显示，避免用户看到空白或过期数据 -->
+                        <div id="screener-loading-overlay" class="absolute inset-0 bg-slate-950/95 backdrop-blur-sm z-20 hidden flex-col items-center justify-start overflow-y-auto">
+                            <div class="flex flex-col items-center gap-4 w-full max-w-lg px-6 py-8">
+                                <div class="w-12 h-12 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
+                                <div class="text-center">
+                                    <div id="screener-loading-text" class="text-cyan-300 text-lg font-bold">正在加载行情数据...</div>
+                                    <div id="screener-loading-detail" class="text-slate-400 text-sm mt-1 max-w-[400px] leading-6"></div>
+                                </div>
+                                <div class="flex items-center gap-2" id="screener-loading-phases">
+                                    <div class="screener-phase-step flex flex-col items-center" data-phase="1">
+                                        <div class="w-8 h-8 rounded-full border-2 border-slate-600 flex items-center justify-center text-[10px] font-bold bg-slate-800 text-slate-500 screener-phase-circle">
+                                            <i class="fa-solid fa-brain"></i>
+                                        </div>
+                                        <span class="text-[10px] mt-1 text-slate-500 screener-phase-label">AI解析</span>
+                                    </div>
+                                    <div class="w-5 h-0.5 bg-slate-700 screener-phase-connector"></div>
+                                    <div class="screener-phase-step flex flex-col items-center" data-phase="2">
+                                        <div class="w-8 h-8 rounded-full border-2 border-slate-600 flex items-center justify-center text-[10px] font-bold bg-slate-800 text-slate-500 screener-phase-circle">
+                                            <i class="fa-solid fa-database"></i>
+                                        </div>
+                                        <span class="text-[10px] mt-1 text-slate-500 screener-phase-label">获取行情</span>
+                                    </div>
+                                    <div class="w-5 h-0.5 bg-slate-700 screener-phase-connector"></div>
+                                    <div class="screener-phase-step flex flex-col items-center" data-phase="3">
+                                        <div class="w-8 h-8 rounded-full border-2 border-slate-600 flex items-center justify-center text-[10px] font-bold bg-slate-800 text-slate-500 screener-phase-circle">
+                                            <i class="fa-solid fa-filter"></i>
+                                        </div>
+                                        <span class="text-[10px] mt-1 text-slate-500 screener-phase-label">条件筛选</span>
+                                    </div>
+                                    <div class="w-5 h-0.5 bg-slate-700 screener-phase-connector"></div>
+                                    <div class="screener-phase-step flex flex-col items-center" data-phase="4">
+                                        <div class="w-8 h-8 rounded-full border-2 border-slate-600 flex items-center justify-center text-[10px] font-bold bg-slate-800 text-slate-500 screener-phase-circle">
+                                            <i class="fa-solid fa-table"></i>
+                                        </div>
+                                        <span class="text-[10px] mt-1 text-slate-500 screener-phase-label">渲染结果</span>
+                                    </div>
+                                </div>
+                                <div id="screener-loading-log" class="w-full rounded-lg bg-slate-900/90 border border-slate-600 p-3 font-mono text-[11px] space-y-0.5" style="display:none; min-height: 120px; max-height: 240px; overflow-y: auto;"></div>
+                            </div>
+                        </div>
                         <table class="w-full text-left text-xs font-mono">
                             <thead class="text-slate-400 bg-slate-800 uppercase sticky top-0 z-10">
                                 <tr>
@@ -1920,14 +2006,17 @@
                                     <th id="screener-col-code" class="px-3 py-2 cursor-pointer select-none" onclick="sortScreenerResults('code')">股票代码 <i class="fa-solid fa-sort text-slate-500"></i></th>
                                     <th class="px-3 py-2 cursor-pointer select-none" onclick="sortScreenerResults('name')">标的名称</th>
                                     <th id="screener-col-price" class="px-3 py-2 cursor-pointer select-none" onclick="sortScreenerResults('price')">最新价 <i class="fa-solid fa-sort text-slate-500"></i></th>
+                                    <th class="px-3 py-2 whitespace-nowrap" title="价格数据来源与更新时间">来源 / 更新时间</th>
                                     <th id="screener-col-change" class="px-3 py-2 cursor-pointer select-none" onclick="sortScreenerResults('change_pct')">涨跌幅 <i class="fa-solid fa-sort text-slate-500"></i></th>
                                     <th id="screener-col-turnover" class="px-3 py-2 cursor-pointer select-none" onclick="sortScreenerResults('turnover')">换手率 <i class="fa-solid fa-sort text-slate-500"></i></th>
                                     <th id="screener-col-floatmv" class="px-3 py-2 cursor-pointer select-none" onclick="sortScreenerResults('float_mv')">流通市值 <i class="fa-solid fa-sort text-slate-500"></i></th>
+                                    <th id="screener-col-strength" class="px-3 py-2 cursor-pointer select-none" onclick="sortScreenerResults('strength_score')" title="契合度：综合评估该标的对本次筛选条件的满足程度">契合度 <i class="fa-solid fa-sort text-slate-500"></i></th>
                                     <th class="px-3 py-2">筛选时间</th>
+                                    <th class="px-3 py-2 w-20">AI分析</th>
                                 </tr>
                             </thead>
                             <tbody id="screener-results-body" class="divide-y divide-slate-700 text-slate-300">
-                                <tr><td colspan="8" class="px-3 py-8 text-center text-slate-500">请设置筛选条件后点击"应用筛选"</td></tr>
+                                <tr><td colspan="10" class="px-3 py-8 text-center text-slate-500">请设置筛选条件后点击"应用筛选"</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1940,14 +2029,15 @@
                             <button id="screener-next-page-btn" onclick="nextScreenerPage()" class="bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded text-xs border border-slate-500">下一页</button>
                             <span class="w-px h-5 bg-slate-700 mx-1"></span>
                             <button onclick="addToStockPool()" class="bg-cyan-700 hover:bg-cyan-600 text-white px-2 py-1 rounded text-xs border border-cyan-500">加入标的池</button>
-                            <button id="screener-send-backtest-btn" onclick="sendToBacktest()" class="bg-indigo-700 hover:bg-indigo-600 text-white px-2 py-1 rounded text-xs border border-indigo-500">发送到回测</button>
+                            <button id="screener-send-backtest-btn" onclick="sendToBacktest()" class="bg-indigo-700 hover:bg-indigo-600 text-white px-2 py-1 rounded text-xs border border-indigo-500">单只回测</button>
+                            <button id="screener-batch-backtest-btn" onclick="startScreenerBatchBacktest()" class="bg-cyan-700 hover:bg-cyan-600 text-white px-2 py-1 rounded text-xs border border-cyan-500" title="对筛选结果批量执行回测"><i class="fa-solid fa-layer-group mr-1"></i>批量回测</button>
                             <button onclick="exportScreenerCSV()" class="bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded text-xs border border-slate-500">导出CSV</button>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- 底部功能区：回测配置 -->
+            <!-- 底部功能区：批量回测配置 -->
             <div class="border-t border-slate-700 bg-slate-950/40 p-3 shrink-0">
                 <div class="flex flex-wrap items-center gap-3 text-xs">
                     <label class="text-slate-300">回测起始
@@ -1956,21 +2046,11 @@
                     <label class="text-slate-300">回测结束
                         <input id="screener-bt-end" type="date" class="ml-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
                     </label>
-                    <label class="text-slate-300">收益基准
-                        <select id="screener-bt-benchmark" class="ml-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white">
-                            <option value="000300">沪深300</option>
-                            <option value="000905">中证500</option>
-                            <option value="000852">中证1000</option>
-                            <option value="000001">上证指数</option>
-                        </select>
-                    </label>
                     <label class="text-slate-300">初始资金
                         <input id="screener-bt-capital" type="number" min="10000" step="10000" value="1000000" class="ml-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white font-mono w-24" />
                     </label>
-                    <span class="text-[11px] text-slate-500">计算以上策略模型在历史上的收益</span>
-                    <button id="screener-start-backtest-btn" onclick="startScreenerBacktest()" class="bg-emerald-700 hover:bg-emerald-600 text-white px-4 py-1.5 rounded text-xs border border-emerald-500 font-bold">开始回测</button>
+                    <span class="text-[11px] text-slate-500">对筛选结果批量执行回测</span>
                 </div>
-                <div id="screener-backtest-compliance-tip" class="mt-2 text-[11px] text-amber-300"></div>
             </div>
         </div>
     </div>
@@ -1986,7 +2066,12 @@
         <div class="w-[80vw] max-w-[80vw] h-[100vh] max-h-[100vh] bg-slate-900 border border-violet-600 rounded-none shadow-2xl flex flex-col overflow-hidden min-h-0">
             <div class="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
                 <div class="text-white font-bold"><i class="fa-solid fa-wand-magic-sparkles mr-2 text-violet-400"></i>AI 策略解析</div>
-                <button onclick="closeScreenerAIParser()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                <div class="flex items-center gap-2">
+                    <button onclick="closeScreenerAIParser(); openScreenerModal(); setScreenerAdvancedMode(true);" class="text-[11px] text-slate-400 hover:text-white border border-slate-600 hover:border-slate-400 rounded px-2 py-1" title="切换到传统条件筛选界面">
+                        <i class="fa-solid fa-sliders mr-1"></i>高级筛选
+                    </button>
+                    <button onclick="closeScreenerAIParser()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                </div>
             </div>
             <div class="px-4 py-2 text-xs text-slate-400 border-b border-slate-700">
                 输入你的策略描述，大模型会自动解析为筛选条件。高亮项为筛选器可直接执行，其余条件将进入回测引擎执行。
@@ -2002,10 +2087,6 @@
                     <button onclick="loadScreenerPromptExamples(true)" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded border border-slate-600">刷新示例</button>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px]">
-                    <label class="flex flex-col gap-1">
-                        <span class="text-slate-400">最多回测多少只股票（0=全部）</span>
-                        <input id="screener-ai-batch-topn" type="number" min="0" value="0" class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono" />
-                    </label>
                     <label class="flex flex-col gap-1">
                         <span class="text-slate-400">策略选择范围</span>
                         <select id="screener-ai-strategy-mode" class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200">
@@ -2044,12 +2125,6 @@
                         <button onclick="runAIScreenerDirectly()" id="screener-ai-direct-filter-btn" class="bg-emerald-700 hover:bg-emerald-600 text-white px-4 py-2 rounded text-xs border border-emerald-500 font-semibold">
                             <i class="fa-solid fa-filter mr-1"></i>直接出选股结果
                         </button>
-                        <button onclick="runAIScreenerAndStartBacktest()" id="screener-ai-direct-backtest-btn" class="bg-indigo-700 hover:bg-indigo-600 text-white px-4 py-2 rounded text-xs border border-indigo-500 font-semibold">
-                            <i class="fa-solid fa-rocket mr-1"></i>快速回测（首只）
-                        </button>
-                        <button onclick="runAIScreenerAndStartBatchBacktest()" id="screener-ai-direct-batch-btn" class="bg-cyan-700 hover:bg-cyan-600 text-white px-4 py-2 rounded text-xs border border-cyan-500 font-semibold">
-                            <i class="fa-solid fa-layer-group mr-1"></i>批量回测（多只×多策略）
-                        </button>
                         <button onclick="fillPromptFromCurrentStrategy()" id="screener-ai-from-strategy-btn" class="bg-sky-700 hover:bg-sky-600 text-white px-4 py-2 rounded text-xs border border-sky-500 font-semibold">
                             <i class="fa-solid fa-right-left mr-1"></i>从当前策略生成提示词
                         </button>
@@ -2062,7 +2137,7 @@
                     阶段：待命 | 进度：0% | 预计剩余：-- | 最近成功：--
                 </div>
                 <div class="text-[11px] text-slate-400">
-                    按钮说明：先看AI怎么理解=仅解析不筛选；直接出选股结果=解析+筛选；快速回测（首只）=解析+筛选+单标的回测；批量回测（多只×多策略）=解析+筛选+批量任务执行。
+                    按钮说明：直接出选股结果=解析+筛选，可在结果页进一步操作回测；从当前策略生成提示词=复用现有策略描述；生成策略到管理器=保存AI解析结果为策略。
                 </div>
                 <details class="bg-slate-950/60 border border-slate-700 rounded p-2">
                     <summary class="cursor-pointer text-[11px] text-sky-300">AI交互历史记录（解析/筛选/建策略）</summary>
@@ -2092,10 +2167,14 @@
             <!-- 解析结果展示 -->
             <div id="screener-ai-result" class="px-4 py-3 space-y-3 hidden">
                 <div class="text-sm text-emerald-300 font-semibold"><i class="fa-solid fa-check-circle mr-1"></i>解析完成</div>
+                <div class="text-[11px] text-slate-400">
+                    <i class="fa-solid fa-circle-info mr-1 text-sky-400"></i>
+                    下方条件卡片可直接修订：点击 <span class="text-amber-300">✏️</span> 修改数值，点击 <span class="text-rose-300">🗑️</span> 移除条件。圆点颜色表示大模型对该条件的理解置信度（仅供参考）。
+                </div>
                 <!-- 筛选条件预览 -->
                 <div class="bg-slate-950/60 border border-slate-700 rounded p-3">
                     <div class="text-xs text-violet-300 font-semibold mb-2">可执行筛选条件</div>
-                    <div id="screener-ai-screen-conditions" class="space-y-1 text-[11px] font-mono text-slate-300"></div>
+                    <div id="screener-ai-screen-conditions" class="space-y-1.5 text-[11px] font-mono text-slate-300"></div>
                 </div>
                 <!-- 执行规则预览 -->
                 <div class="bg-slate-950/60 border border-slate-700 rounded p-3">
@@ -2105,8 +2184,56 @@
             </div>
             </div>
             <div class="px-4 py-3 border-t border-slate-700 flex justify-end gap-2">
-                <button onclick="applyAIParsedConditions()" id="screener-ai-apply-btn" class="bg-emerald-700 hover:bg-emerald-600 text-white px-4 py-2 rounded text-xs border border-emerald-500 font-semibold hidden"><i class="fa-solid fa-check mr-1"></i>应用筛选条件</button>
+                <button onclick="applyAIParsedConditions()" id="screener-ai-apply-btn" class="bg-emerald-700 hover:bg-emerald-600 text-white px-4 py-2 rounded text-xs border border-emerald-500 font-semibold hidden"><i class="fa-solid fa-check mr-1"></i>确认并筛选</button>
                 <button onclick="closeScreenerAIParser()" class="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded text-xs border border-slate-500">关闭</button>
+            </div>
+        </div>
+    </div>
+    <!-- AI股票分析弹窗 -->
+    <div id="screener-stock-analysis-modal" class="hidden fixed inset-0 bg-black/75 z-[170] flex items-center justify-center p-4">
+        <div class="w-[900px] max-w-[94vw] max-h-[92vh] bg-slate-900 border border-violet-600 rounded-lg shadow-2xl flex flex-col overflow-hidden min-h-0">
+            <div class="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+                <div class="text-white font-bold"><i class="fa-solid fa-magnifying-glass-chart mr-2 text-violet-400"></i>AI深度分析: <span id="stock-analysis-code" class="text-violet-300"></span></div>
+                <button onclick="closeStockAnalysisModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4 space-y-4">
+                <!-- Loading状态 -->
+                <div id="stock-analysis-loading" class="hidden flex flex-col items-center justify-center py-12">
+                    <div class="w-12 h-12 border-4 border-violet-500 border-t-transparent rounded-full animate-spin"></div>
+                    <div class="mt-4 text-violet-300 font-semibold">AI正在深度分析...</div>
+                    <div id="stock-analysis-progress" class="mt-2 text-slate-400 text-sm">正在获取股票数据...</div>
+                </div>
+                <!-- 分析结果 -->
+                <div id="stock-analysis-result" class="hidden space-y-4">
+                    <!-- 基本信息 -->
+                    <div class="bg-slate-800/50 border border-slate-700 rounded-lg p-4">
+                        <div class="text-sm font-semibold text-cyan-300 mb-2"><i class="fa-solid fa-circle-info mr-1"></i>基本信息</div>
+                        <div id="stock-analysis-basic" class="text-sm text-slate-300 space-y-1"></div>
+                    </div>
+                    <!-- 入选理由 -->
+                    <div class="bg-slate-800/50 border border-emerald-700/30 rounded-lg p-4">
+                        <div class="text-sm font-semibold text-emerald-300 mb-2"><i class="fa-solid fa-check-circle mr-1"></i>入选理由（基于筛选条件）</div>
+                        <div id="stock-analysis-reasons" class="text-sm text-slate-300 space-y-1"></div>
+                    </div>
+                    <!-- AI深度分析 -->
+                    <div class="bg-slate-800/50 border border-violet-700/30 rounded-lg p-4">
+                        <div class="text-sm font-semibold text-violet-300 mb-2"><i class="fa-solid fa-robot mr-1"></i>AI深度分析</div>
+                        <div id="stock-analysis-ai" class="text-sm text-slate-300 leading-6 whitespace-pre-wrap"></div>
+                    </div>
+                    <!-- 风险提示 -->
+                    <div class="bg-slate-800/50 border border-amber-700/30 rounded-lg p-4">
+                        <div class="text-sm font-semibold text-amber-300 mb-2"><i class="fa-solid fa-triangle-exclamation mr-1"></i>风险提示</div>
+                        <div id="stock-analysis-risk" class="text-sm text-slate-300 space-y-1"></div>
+                    </div>
+                </div>
+                <!-- 错误信息 -->
+                <div id="stock-analysis-error" class="hidden bg-rose-950/30 border border-rose-700/50 rounded-lg p-4">
+                    <div class="text-sm text-rose-300"><i class="fa-solid fa-circle-xmark mr-1"></i><span id="stock-analysis-error-text"></span></div>
+                </div>
+            </div>
+            <div class="px-4 py-3 border-t border-slate-700 flex justify-between items-center">
+                <div class="text-[11px] text-slate-500">分析基于公开数据和AI模型，仅供参考，不构成投资建议</div>
+                <button onclick="closeStockAnalysisModal()" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded text-sm border border-slate-500">关闭</button>
             </div>
         </div>
     </div>
@@ -6687,6 +6814,17 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 ]
             },
             {
+                title: '条件筛选模型',
+                subtitle: '条件筛选器专用大模型（data_provider.screener_llm_*）。建议选非推理模型（如 deepseek-chat / qwen-plus），响应快且 JSON 输出稳定。',
+                fields: [
+                    { path: 'data_provider.screener_llm_provider', label: '服务类型（条件筛选优先）', type: 'select', options: [{ value: 'openai_compatible', label: 'OpenAI兼容' }, { value: 'zhipu', label: '智谱GLM' }, { value: 'ollama', label: 'Ollama本地' }] },
+                    { path: 'data_provider.screener_llm_api_url', label: '条件筛选服务地址', type: 'text', placeholder: '例如 https://xxx/v1；留空则回退到新增策略智能服务地址' },
+                    { path: 'data_provider.screener_llm_api_key', label: '条件筛选服务密钥', type: 'password', secret: true, desc: '留空则回退到新增策略智能服务密钥' },
+                    { path: 'data_provider.screener_llm_model', label: '条件筛选模型名称', type: 'text', placeholder: '例如 deepseek-chat / qwen-plus（建议非推理模型）' },
+                    { path: 'data_provider.screener_llm_timeout_sec', label: '条件筛选超时秒数', type: 'number', min: 10, max: 300, step: 1, slider: true }
+                ]
+            },
+            {
                 title: '基本面适配器',
                 subtitle: '全局可插拔（回测/近似实时共用，按接口勾选）',
                 fields: [
@@ -6956,6 +7094,16 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                             { path: 'data_provider.strategy_llm_api_key', label: '新增策略智能服务密钥（AI策略解析优先）', type: 'password', secret: true, desc: '密钥字段会走 private_config_path 覆盖；Ollama本地可留空' },
                             { path: 'data_provider.strategy_llm_model', label: '新增策略智能模型名称（AI策略解析优先）', type: 'text', placeholder: '例如 qwen-plus / glm-4 / qwen2.5:14b' },
                             { path: 'data_provider.strategy_llm_timeout_sec', label: '新增策略智能超时秒数', type: 'number', min: 30, max: 300, step: 1, slider: true }
+                        ]
+                    },
+                    {
+                        title: '条件筛选模型',
+                        fields: [
+                            { path: 'data_provider.screener_llm_provider', label: '服务类型（条件筛选优先）', type: 'select', options: [{ value: 'openai_compatible', label: 'OpenAI兼容' }, { value: 'zhipu', label: '智谱GLM' }, { value: 'ollama', label: 'Ollama本地' }] },
+                            { path: 'data_provider.screener_llm_api_url', label: '条件筛选服务地址', type: 'text', placeholder: '留空则回退到新增策略智能服务地址' },
+                            { path: 'data_provider.screener_llm_api_key', label: '条件筛选服务密钥', type: 'password', secret: true, desc: '留空则回退到新增策略智能服务密钥' },
+                            { path: 'data_provider.screener_llm_model', label: '条件筛选模型名称', type: 'text', placeholder: '例如 deepseek-chat / qwen-plus（建议非推理模型）' },
+                            { path: 'data_provider.screener_llm_timeout_sec', label: '条件筛选超时秒数', type: 'number', min: 10, max: 300, step: 1, slider: true }
                         ]
                     }
                 ]
@@ -7916,6 +8064,19 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 `;
                 return ops;
             }
+            if (title === '条件筛选模型') {
+                ops.innerHTML = `
+                    <div class="text-[11px] text-cyan-300 font-bold">本板块连通性检查</div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button id="config-llm-screener-test-btn" onclick="testScreenerLlmConnectivity()" class="bg-violet-700 hover:bg-violet-600 text-white px-3 py-1.5 rounded text-xs border border-violet-500">
+                            <i id="config-llm-screener-test-icon" class="fa-solid fa-robot"></i>
+                            <span id="config-llm-screener-test-label">测试条件筛选模型</span>
+                        </button>
+                        <span id="config-llm-screener-test-status" class="text-[10px] text-slate-400">测试 data_provider.screener_llm_* 配置域</span>
+                    </div>
+                `;
+                return ops;
+            }
             return null;
         }
 
@@ -8346,6 +8507,8 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
         let screenerContextRow = null;
         let screenerAdvancedMode = false;
         let screenerDataSourceDoc = null;
+        // AI解析时选择的策略ID列表，供后续回测自动带入
+        let screenerAiSelectedStrategyIds = [];
         // 数据来源说明默认折叠，减少首屏高度占用。
         let screenerDataSourceCollapsed = true;
 
@@ -8504,13 +8667,15 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             }
             const cAll = fAll.counts;
             const rAll = fAll.ratio_pct;
+            // 来源占比说明：pytdx=通达信实时行情，DuckDB=本地历史库，AkShare=实时行情兜底，mixed=pytdx+DuckDB，basic=仅股票清单。
+            const sourceSummary = (c, r) => `pytdx ${c.pytdx || 0}(${r.pytdx || 0}%)，DuckDB ${c.duckdb || 0}(${r.duckdb || 0}%)，AkShare ${c.akshare || 0}(${r.akshare || 0}%)，混合 ${c.mixed || 0}(${r.mixed || 0}%)，基础 ${c.basic || 0}(${r.basic || 0}%)`;
             if (fPage && fPage.counts && fPage.ratio_pct) {
                 const cPage = fPage.counts;
                 const rPage = fPage.ratio_pct;
-                el.textContent = `当前页来源占比：DuckDB ${cPage.duckdb || 0}(${rPage.duckdb || 0}%)，AkShare ${cPage.akshare || 0}(${rPage.akshare || 0}%)，混合 ${cPage.mixed || 0}(${rPage.mixed || 0}%)，基础 ${cPage.basic || 0}(${rPage.basic || 0}%)；筛选全集：DuckDB ${cAll.duckdb || 0}(${rAll.duckdb || 0}%)，AkShare ${cAll.akshare || 0}(${rAll.akshare || 0}%)，混合 ${cAll.mixed || 0}(${rAll.mixed || 0}%)，基础 ${cAll.basic || 0}(${rAll.basic || 0}%)。说明：混合=DuckDB主数据+AkShare补字段。`;
+                el.textContent = `当前页：${sourceSummary(cPage, rPage)}；全集：${sourceSummary(cAll, rAll)}。说明：pytdx=通达信实时行情；DuckDB=本地历史库；AkShare=实时行情兜底；mixed=pytdx+DuckDB。`;
                 return;
             }
-            el.textContent = `筛选全集来源占比：DuckDB ${cAll.duckdb || 0}(${rAll.duckdb || 0}%)，AkShare ${cAll.akshare || 0}(${rAll.akshare || 0}%)，混合 ${cAll.mixed || 0}(${rAll.mixed || 0}%)，基础 ${cAll.basic || 0}(${rAll.basic || 0}%)。说明：混合=DuckDB主数据+AkShare补字段。`;
+            el.textContent = `筛选全集来源占比：${sourceSummary(cAll, rAll)}。说明：pytdx=通达信实时行情；DuckDB=本地历史库；AkShare=实时行情兜底；mixed=pytdx+DuckDB。`;
         }
 
         function populateScreenerSelect(id, options) {
@@ -8592,6 +8757,20 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             return '';
         }
 
+        function _lookupCatalogField(targetKey) {
+            // 从 screenerCatalog 查找字段定义，用于补全条件的 tab/label/unit 元数据。
+            if (!screenerCatalog || typeof screenerCatalog !== 'object') return null;
+            for (const tab of Object.keys(screenerCatalog)) {
+                const cats = Array.isArray(screenerCatalog[tab]) ? screenerCatalog[tab] : [];
+                for (const cat of cats) {
+                    const fields = Array.isArray(cat?.fields) ? cat.fields : [];
+                    const hit = fields.find(f => String(f?.key || '') === targetKey);
+                    if (hit) return { ...hit, tab };
+                }
+            }
+            return null;
+        }
+
         function gatherActiveConditions() {
             const conditions = [];
             // Range fields
@@ -8600,22 +8779,38 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 const role = input.dataset.role;
                 const val = input.value;
                 if (!val) return;
-                // Find or create condition entry for this key
                 let cond = conditions.find(c => c.key === key);
                 if (!cond) {
-                    cond = { key, operator: 'between' };
+                    const fieldDef = _lookupCatalogField(key);
+                    cond = {
+                        key,
+                        operator: 'between',
+                        tab: fieldDef?.tab || screenerActiveTab || 'market',
+                        label: fieldDef?.label || key,
+                        unit: fieldDef?.unit || '',
+                        enabled: true,
+                    };
                     conditions.push(cond);
                 }
                 if (role === 'min') { cond.value = parseFloat(val); }
                 else { cond.value2 = parseFloat(val); }
-                // If only one side set, switch operator
                 if (cond.value !== undefined && cond.value2 === undefined) { cond.operator = 'gte'; cond.value2 = undefined; }
                 else if (cond.value === undefined && cond.value2 !== undefined) { cond.operator = 'lte'; cond.value = undefined; }
             });
             // Toggle fields
             document.querySelectorAll('[data-type="toggle"]').forEach(input => {
                 if (input.checked) {
-                    conditions.push({ key: input.dataset.key, operator: 'toggle', value: true });
+                    const key = input.dataset.key;
+                    const fieldDef = _lookupCatalogField(key);
+                    conditions.push({
+                        key,
+                        operator: 'toggle',
+                        value: true,
+                        tab: fieldDef?.tab || screenerActiveTab || 'market',
+                        label: fieldDef?.label || key,
+                        unit: fieldDef?.unit || '',
+                        enabled: true,
+                    });
                 }
             });
             return conditions;
@@ -8653,43 +8848,53 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             }, 3000);
         }
 
-        async function applyScreenerFilter() {
+        async function applyScreenerFilter(overrideBody) {
             const exchange = document.getElementById('screener-exchange')?.value || '';
             const region = document.getElementById('screener-region')?.value || '';
             const enterprise = document.getElementById('screener-enterprise')?.value || '';
             const margin = document.getElementById('screener-margin')?.value || '';
             const logicMode = document.getElementById('screener-logic-mode')?.value || 'AND';
 
-            const conditions = gatherActiveConditions();
-            const body = {
-                exchange: exchange || null,
-                region: region || null,
-                enterprise_type: enterprise || null,
-                margin_trading: margin || null,
-                logic_mode: logicMode,
-                page: screenerPage,
-                page_size: screenerPageSize,
-                sort_by: screenerSortBy,
-                sort_order: screenerSortOrder,
-            };
+            // overrideBody：跨 tab 场景下，AI 解析条件直接按 tab 分组传入，
+            // 避免只发送 screenerActiveTab 对应的条件导致其他 tab 条件丢失。
+            const body = overrideBody || {};
+            if (!overrideBody) {
+                const conditions = gatherActiveConditions();
+                body.exchange = exchange || null;
+                body.region = region || null;
+                body.enterprise_type = enterprise || null;
+                body.margin_trading = margin || null;
+                body.logic_mode = logicMode;
+                body.page = screenerPage;
+                body.page_size = screenerPageSize;
+                body.sort_by = screenerSortBy;
+                body.sort_order = screenerSortOrder;
 
-            if (screenerActiveTab === 'market') {
-                body.market_conditions = conditions;
-            } else if (screenerActiveTab === 'technical') {
-                body.technical_conditions = conditions;
-            } else if (screenerActiveTab === 'financial') {
-                body.financial_conditions = conditions;
+                if (screenerActiveTab === 'market') {
+                    body.market_conditions = conditions;
+                } else if (screenerActiveTab === 'technical') {
+                    body.technical_conditions = conditions;
+                } else if (screenerActiveTab === 'financial') {
+                    body.financial_conditions = conditions;
+                }
             }
 
+            // 缓存本次请求体，供列头排序时触发服务端重排。
+            screenerLastFilterBody = body;
+
+            showScreenerLoading('正在筛选...', '向服务器发送筛选条件');
             try {
+                updateScreenerLoading('正在查询数据...', '从本地数据库或数据源获取行情数据');
                 const res = await fetch('/api/screener/filter', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
                 });
+                updateScreenerLoading('正在处理结果...', '解析筛选结果并准备渲染');
                 const data = await res.json();
                 if (data.status === 'success') {
-                    // 分页兜底：若总数>0但当前页为空，自动回到第1页重查，避免“闪成0条”的错觉。
+                    updateScreenerLoading('正在渲染表格...', `共 ${data.total || 0} 条结果，正在生成表格`);
+                    // 分页兜底：若总数>0但当前页为空，自动回到第1页重查，避免”闪成0条”的错觉。
                     const total = Number(data.total || 0);
                     const totalPages = Math.max(1, Number(data.total_pages || 1));
                     const rows = Array.isArray(data.data) ? data.data : [];
@@ -8703,7 +8908,8 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     screenerTotal = total;
                     screenerTotalPages = totalPages;
                     screenerPage = Math.min(Math.max(1, Number(data.page || body.page || 1)), screenerTotalPages);
-                    // 刷新本次筛选来源占比展示。
+                    // 渲染数据缺失告警 + 来源占比 + 结果列表。
+                    renderScreenerUnsupportedConditions(data.unsupported_conditions || [], data.field_coverage || null);
                     renderScreenerSourceStats(data.source_stats || null);
                     renderScreenerResults();
                     showScreenerToast(`筛选已生效，本页 ${screenerResults.length} 条`, 'success');
@@ -8712,6 +8918,8 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 }
             } catch (e) {
                 showScreenerToast('请求失败: ' + e.message, 'error');
+            } finally {
+                hideScreenerLoading();
             }
         }
 
@@ -8770,6 +8978,133 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             return { hasPrice, hasChange, hasTurnover, hasFloatMv };
         }
 
+        // Loading 遮罩控制：数据加载时显示，渲染完成后隐藏
+        let screenerProgressSSE = null;
+        let screenerProgressOffset = 0;
+
+        function _connectScreenerProgressSSE() {
+            // 建立 SSE 连接，实时接收后端进度日志
+            if (screenerProgressSSE) {
+                screenerProgressSSE.close();
+            }
+            screenerProgressOffset = 0;
+            // 优先使用 AI 解析弹窗内的日志区域，否则使用主表格区域的
+            const logEl = document.getElementById('screener-ai-loading-log') || document.getElementById('screener-loading-log');
+            if (logEl) {
+                logEl.innerHTML = '';
+                logEl.style.display = 'block';
+            }
+            try {
+                screenerProgressSSE = new EventSource('/api/screener/progress/stream');
+                screenerProgressSSE.onopen = () => {};
+                screenerProgressSSE.addEventListener('progress', (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        screenerProgressOffset = data.offset || 0;
+                        const entries = data.entries || [];
+                        const logEl = document.getElementById('screener-ai-loading-log') || document.getElementById('screener-loading-log');
+                        if (!logEl) return;
+                        entries.forEach((entry) => {
+                            const line = document.createElement('div');
+                            const colorMap = {
+                                'info': 'text-slate-400',
+                                'success': 'text-emerald-400',
+                                'warning': 'text-amber-400',
+                                'error': 'text-red-400',
+                            };
+                            const color = colorMap[entry.level] || 'text-slate-400';
+                            line.className = color;
+                            const ts = new Date(entry.ts * 1000);
+                            const timeStr = ts.toLocaleTimeString('zh-CN', { hour12: false });
+                            line.textContent = `[${timeStr}] ${entry.message}`;
+                            logEl.appendChild(line);
+                            logEl.scrollTop = logEl.scrollHeight;
+                        });
+                    } catch (e) {
+                        // 忽略解析错误
+                    }
+                });
+                screenerProgressSSE.onerror = () => {
+                    // 连接断开时静默处理
+                };
+            } catch (e) {
+                // SSE 不可用时降级
+            }
+        }
+
+        function _disconnectScreenerProgressSSE() {
+            if (screenerProgressSSE) {
+                screenerProgressSSE.close();
+                screenerProgressSSE = null;
+            }
+            const logEl = document.getElementById('screener-ai-loading-log') || document.getElementById('screener-loading-log');
+            if (logEl) {
+                logEl.style.display = 'none';
+            }
+        }
+
+        function showScreenerLoading(mainText, detailText) {
+            // 始终使用主表格区域的遮罩，避免 AI 解析弹窗关闭后遮罩跟着消失
+            const overlay = document.getElementById('screener-loading-overlay');
+            const mainEl = document.getElementById('screener-loading-text');
+            const detailEl = document.getElementById('screener-loading-detail');
+            if (overlay) {
+                overlay.classList.remove('hidden');
+            }
+            if (mainEl && mainText) {
+                mainEl.textContent = mainText;
+            } else if (mainEl) {
+                mainEl.textContent = '正在加载行情数据...';
+            }
+            if (detailEl) {
+                detailEl.textContent = detailText || '';
+            }
+            // 默认重置所有阶段指示器
+            _setScreenerLoadingPhase(0);
+            // 建立 SSE 连接，实时接收进度日志
+            _connectScreenerProgressSSE();
+        }
+        function updateScreenerLoading(mainText, detailText) {
+            const mainEl = document.getElementById('screener-loading-text');
+            const detailEl = document.getElementById('screener-loading-detail');
+            if (mainEl && mainText) mainEl.textContent = mainText;
+            if (detailEl && detailText) detailEl.textContent = detailText;
+        }
+        function hideScreenerLoading() {
+            const overlay = document.getElementById('screener-loading-overlay');
+            if (overlay) {
+                overlay.classList.add('hidden');
+            }
+            // 重置阶段指示器状态
+            _setScreenerLoadingPhase(0);
+            // 断开 SSE 连接
+            _disconnectScreenerProgressSSE();
+        }
+        function _setScreenerLoadingPhase(activePhase) {
+            // activePhase: 0=全部重置, 1~4=当前激活阶段（之前的标记为已完成）
+            const steps = document.querySelectorAll('#screener-loading-phases .screener-phase-step');
+            const connectors = document.querySelectorAll('#screener-loading-phases .screener-phase-connector');
+            steps.forEach((step) => {
+                const phase = parseInt(step.getAttribute('data-phase') || '0', 10);
+                step.classList.remove('phase-active', 'phase-done');
+                if (activePhase > 0 && phase < activePhase) {
+                    step.classList.add('phase-done');
+                } else if (activePhase > 0 && phase === activePhase) {
+                    step.classList.add('phase-active');
+                }
+            });
+            connectors.forEach((conn, idx) => {
+                conn.classList.remove('connector-done', 'connector-active');
+                if (activePhase > 0) {
+                    if (idx + 1 < activePhase) {
+                        conn.classList.add('connector-done');
+                    } else if (idx + 1 === activePhase) {
+                        conn.classList.add('connector-active');
+                    }
+                }
+            });
+        }
+
         function renderScreenerResults() {
             const tbody = document.getElementById('screener-results-body');
             const info = document.getElementById('screener-pagination-info');
@@ -8781,10 +9116,11 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             const totalPages = Math.max(1, Number(screenerTotalPages || 1));
 
             if (!screenerResults.length) {
-                tbody.innerHTML = '<tr><td colspan="8" class="px-3 py-8 text-center text-slate-500">暂无符合条件的标的</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" class="px-3 py-8 text-center text-slate-500">暂无符合条件的标的</td></tr>';
                 if (info) info.textContent = `当前页 ${currentRows} 条 / 共 ${totalRows} 条`;
                 if (pageNum) pageNum.textContent = `${currentPage} / ${totalPages}`;
                 updateScreenerPaginationButtons();
+                updateScreenerBacktestButtons();
                 return;
             }
 
@@ -8793,27 +9129,146 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 const stockCode = _resolveDisplayStockCode(row);
                 const checked = screenerSelectedCodes.has(stockCode) ? 'checked' : '';
                 const changePct = row.change_pct != null ? (row.change_pct >= 0 ? '+' : '') + (row.change_pct || 0).toFixed(2) + '%' : '--';
-                const changeClass = (row.change_pct || 0) >= 0 ? 'text-trading-green' : 'text-trading-red';
+                const changeClass = (row.change_pct || 0) >= 0 ? 'text-trading-red' : 'text-trading-green';
                 const price = row.price != null ? (row.price).toFixed(2) : '--';
+                // 价格来源：显示数据源标签，便于用户判断数据时效性
+                const sourceRaw = String(row._source_main || 'unknown').toLowerCase();
+                const sourceLabelMap = { duckdb: '本地库', pytdx: '通达信', akshare: 'AkShare', mixed: '混合', realtime: '实时', basic: '基础' };
+                const sourceLabel = sourceLabelMap[sourceRaw] || sourceRaw;
+                const sourceColorMap = { duckdb: 'text-cyan-400', pytdx: 'text-emerald-400', akshare: 'text-amber-400', mixed: 'text-purple-400', realtime: 'text-green-400', basic: 'text-slate-500' };
+                const sourceColor = sourceColorMap[sourceRaw] || 'text-slate-500';
+                // 更新时间：完整显示 年月日 时分秒，便于用户判断数据时效性
+                const updateTime = row.screener_time || '--';
+                // 价格日期：显示价格实际对应的交易日
+                const priceDate = row.price_date || '';
                 const turnover = row.turnover != null ? (row.turnover).toFixed(2) + '%' : '--';
                 const floatMv = row.float_mv != null ? formatMv(row.float_mv) : '--';
+                // 契合度：分数 + emoji 指示 + hover 显示每条理由详情。
+                const strengthCell = _renderScreenerStrengthCell(row);
                 html += `<tr class="hover:bg-slate-800/40" oncontextmenu="showScreenerContextMenu(event, '${stockCode}')">
                     <td class="px-3 py-1.5"><input type="checkbox" ${checked} onchange="toggleScreenerRow('${stockCode}', this.checked)" /></td>
                     <td class="px-3 py-1.5 text-white code-font">${stockCode}</td>
                     <td class="px-3 py-1.5">${row.name || '--'}</td>
                     <td class="px-3 py-1.5 code-font" style="display:${metricFlags.hasPrice ? '' : 'none'}">${price}</td>
+                    <td class="px-3 py-1.5 text-[10px] whitespace-nowrap" style="display:${metricFlags.hasPrice ? '' : 'none'}" title="价格日期: ${priceDate || '未知'}&#10;数据获取: ${updateTime}"><span class="${sourceColor}">${sourceLabel}</span><span class="text-slate-500 block">${updateTime}</span></td>
                     <td class="px-3 py-1.5 code-font ${changeClass}" style="display:${metricFlags.hasChange ? '' : 'none'}">${changePct}</td>
                     <td class="px-3 py-1.5 code-font" style="display:${metricFlags.hasTurnover ? '' : 'none'}">${turnover}</td>
                     <td class="px-3 py-1.5 code-font" style="display:${metricFlags.hasFloatMv ? '' : 'none'}">${floatMv}</td>
+                    ${strengthCell}
                     <td class="px-3 py-1.5 text-slate-500">${row.screener_time || '--'}</td>
+                    <td class="px-3 py-1.5"><button onclick="openStockAnalysisModal('${stockCode}', '${row.name || ''}')" class="bg-violet-700 hover:bg-violet-600 text-white px-2 py-0.5 rounded text-[11px] border border-violet-500" title="AI深度分析为什么被选中"><i class="fa-solid fa-robot mr-0.5"></i>分析</button></td>
                 </tr>`;
             });
             tbody.innerHTML = html;
 
-            // 使用后端分页元数据，显示“当前页条数/总条数 + 当前页/总页数”。
+            // 使用后端分页元数据，显示”当前页条数/总条数 + 当前页/总页数”。
             if (info) info.textContent = `当前页 ${currentRows} 条 / 共 ${totalRows} 条`;
             if (pageNum) pageNum.textContent = `${currentPage} / ${totalPages}`;
             updateScreenerPaginationButtons();
+            updateScreenerBacktestButtons();
+        }
+
+        // ==================== AI股票深度分析 ====================
+        function openStockAnalysisModal(code, name) {
+            const modal = document.getElementById('screener-stock-analysis-modal');
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            document.getElementById('stock-analysis-code').textContent = `${code} ${name}`;
+            // 重置状态
+            document.getElementById('stock-analysis-loading').classList.remove('hidden');
+            document.getElementById('stock-analysis-loading').classList.add('flex');
+            document.getElementById('stock-analysis-result').classList.add('hidden');
+            document.getElementById('stock-analysis-error').classList.add('hidden');
+            document.getElementById('stock-analysis-progress').textContent = '正在获取股票数据...';
+            // 调用后端 API
+            analyzeStockWithAI(code, name);
+        }
+
+        function closeStockAnalysisModal() {
+            const modal = document.getElementById('screener-stock-analysis-modal');
+            if (!modal) return;
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        async function analyzeStockWithAI(code, name) {
+            try {
+                // 获取当前筛选条件
+                const filterBody = screenerLastFilterBody || {};
+                const res = await fetch('/api/screener/ai_analyze_stock', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        code: code,
+                        name: name,
+                        filter_conditions: filterBody,
+                    }),
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    renderStockAnalysisResult(data.data);
+                } else {
+                    showStockAnalysisError(data.msg || '分析失败');
+                }
+            } catch (e) {
+                showStockAnalysisError('请求失败: ' + e.message);
+            }
+        }
+
+        function renderStockAnalysisResult(data) {
+            document.getElementById('stock-analysis-loading').classList.add('hidden');
+            document.getElementById('stock-analysis-loading').classList.remove('flex');
+            document.getElementById('stock-analysis-result').classList.remove('hidden');
+            // 基本信息
+            const basicInfo = data.basic_info || {};
+            document.getElementById('stock-analysis-basic').innerHTML = `
+                <div><span class="text-slate-400">股票名称：</span><span class="text-white">${basicInfo.name || '--'}</span></div>
+                <div><span class="text-slate-400">最新价：</span><span class="text-white">${basicInfo.price != null ? basicInfo.price.toFixed(2) : '--'} 元</span></div>
+                <div><span class="text-slate-400">涨跌幅：</span><span class="${(basicInfo.change_pct || 0) >= 0 ? 'text-trading-red' : 'text-trading-green'}">${basicInfo.change_pct != null ? (basicInfo.change_pct >= 0 ? '+' : '') + basicInfo.change_pct.toFixed(2) + '%' : '--'}</span></div>
+                <div><span class="text-slate-400">成交额：</span><span class="text-white">${basicInfo.amount != null ? basicInfo.amount.toFixed(2) + ' 万元' : '--'}</span></div>
+                <div><span class="text-slate-400">换手率：</span><span class="text-white">${basicInfo.turnover != null ? basicInfo.turnover.toFixed(2) + '%' : '--'}</span></div>
+                <div><span class="text-slate-400">流通市值：</span><span class="text-white">${basicInfo.float_mv != null ? formatMv(basicInfo.float_mv) : '--'}</span></div>
+                <div><span class="text-slate-400">数据日期：</span><span class="text-white">${basicInfo.price_date || '--'}</span></div>
+            `;
+            // 入选理由
+            const reasons = data.matched_reasons || [];
+            if (reasons.length > 0) {
+                document.getElementById('stock-analysis-reasons').innerHTML = reasons.map(r => `<div>• ${r}</div>`).join('');
+            } else {
+                document.getElementById('stock-analysis-reasons').innerHTML = '<div class="text-slate-500">无具体理由，仅满足基础筛选条件</div>';
+            }
+            // AI深度分析
+            const aiAnalysisEl = document.getElementById('stock-analysis-ai');
+            const aiAnalysis = data.ai_analysis || '暂无深度分析';
+            // 检查是否是错误引导信息（包含 markdown 格式）
+            if (aiAnalysis.includes('⚠️') || aiAnalysis.includes('**')) {
+                // 简单的 markdown 转 HTML
+                let html = aiAnalysis
+                    .replace(/\*\*(.+?)\*\*/g, '<strong class="text-amber-300">$1</strong>')
+                    .replace(/`(.+?)`/g, '<code class="bg-slate-800 px-1 rounded text-cyan-300">$1</code>')
+                    .replace(/\n\n/g, '</div><div class="mt-3">')
+                    .replace(/\n- /g, '</div><div class="ml-4 text-slate-300">• ')
+                    .replace(/\n(\d+)\. /g, '</div><div class="ml-4 text-slate-300">$1. ')
+                    .replace(/\n/g, '<br>');
+                aiAnalysisEl.innerHTML = `<div class="text-slate-200">${html}</div>`;
+            } else {
+                aiAnalysisEl.textContent = aiAnalysis;
+            }
+            // 风险提示
+            const risks = data.risk_warnings || [];
+            if (risks.length > 0) {
+                document.getElementById('stock-analysis-risk').innerHTML = risks.map(r => `<div>⚠️ ${r}</div>`).join('');
+            } else {
+                document.getElementById('stock-analysis-risk').innerHTML = '<div class="text-slate-500">暂无特别风险提示</div>';
+            }
+        }
+
+        function showStockAnalysisError(msg) {
+            document.getElementById('stock-analysis-loading').classList.add('hidden');
+            document.getElementById('stock-analysis-loading').classList.remove('flex');
+            document.getElementById('stock-analysis-error').classList.remove('hidden');
+            document.getElementById('stock-analysis-error-text').textContent = msg;
         }
 
         function updateScreenerPaginationButtons() {
@@ -8841,6 +9296,91 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             return valInYi.toFixed(1) + '亿';
         }
 
+        function _renderScreenerStrengthCell(row) {
+            // 渲染"契合度"单元格：emoji + 分数，hover 显示每条入选理由。
+            const score = Number(row?.strength_score);
+            const reasons = Array.isArray(row?.matched_reasons) ? row.matched_reasons : [];
+            if (!Number.isFinite(score) && reasons.length === 0) {
+                return '<td class="px-3 py-1.5 text-slate-500">--</td>';
+            }
+            // 分数分档：>=0.75 绿；>=0.55 黄；<0.55 红。
+            let color = 'text-trading-red';
+            let dot = '🔴';
+            if (score >= 0.75) { color = 'text-trading-green'; dot = '🟢'; }
+            else if (score >= 0.55) { color = 'text-amber-400'; dot = '🟡'; }
+            const scoreText = Number.isFinite(score) ? score.toFixed(2) : '--';
+            // tooltip 内容：列出每只股票的具体入选理由。
+            const tooltip = [
+                `【入选理由】`,
+                ...(reasons.length ? reasons : ['(无具体理由，仅满足基础条件)']),
+            ].join('\n').replace(/"/g, '&quot;');
+            return `<td class="px-3 py-1.5 code-font ${color}" title="${tooltip}">
+                <span class="mr-1">${dot}</span>${scoreText}
+            </td>`;
+        }
+
+        function renderScreenerUnsupportedConditions(unsupported, fieldCoverage) {
+            // 渲染"数据缺失告警"面板：列出未生效或部分生效的条件 + 修复建议。
+            const panel = document.getElementById('screener-unsupported-panel');
+            const titleEl = document.getElementById('screener-unsupported-title');
+            const listEl = document.getElementById('screener-unsupported-list');
+            if (!panel || !titleEl || !listEl) return;
+            const items = Array.isArray(unsupported) ? unsupported : [];
+            if (items.length === 0) {
+                panel.classList.add('hidden');
+                listEl.innerHTML = '';
+                return;
+            }
+            const errorCount = items.filter(u => u.severity === 'error').length;
+            const warnCount = items.filter(u => u.severity === 'warning').length;
+            // 标题按严重度组合："2 个条件未生效，1 个覆盖率偏低"
+            const parts = [];
+            if (errorCount > 0) parts.push(`${errorCount} 个条件未生效`);
+            if (warnCount > 0) parts.push(`${warnCount} 个覆盖率偏低`);
+            titleEl.textContent = parts.join('，') || '部分条件未生效';
+            // 列表：severity 用不同颜色区分（error 红、warning 黄）。
+            let html = '';
+            items.forEach(u => {
+                const sev = u.severity === 'error' ? 'error' : 'warning';
+                const icon = sev === 'error' ? 'fa-circle-xmark text-red-400' : 'fa-circle-exclamation text-amber-400';
+                const label = u.label || u.key;
+                const coverage = Number(u.coverage_pct || 0);
+                const opText = _describeConditionOp(u.operator, u.value, u.value2, u.unit);
+                html += `<li class="flex items-start gap-2 text-[11px] leading-5">
+                    <i class="fa-solid ${icon} mt-0.5"></i>
+                    <div class="flex-1">
+                        <span class="text-white font-bold">${label}</span>
+                        <span class="text-amber-200/70 ml-1">${opText}</span>
+                        <span class="text-amber-100/80 ml-1">— ${u.reason || '字段数据缺失'}</span>
+                        ${coverage > 0 ? `<span class="text-amber-300/70 ml-1">(覆盖率 ${coverage.toFixed(1)}%)</span>` : ''}
+                        ${u.suggestion ? `<div class="text-amber-200/60 ml-4">💡 ${u.suggestion}</div>` : ''}
+                    </div>
+                </li>`;
+            });
+            listEl.innerHTML = html;
+            panel.classList.remove('hidden');
+        }
+
+        function _describeConditionOp(op, v, v2, unit) {
+            // 把 operator+value 翻译成人类可读的条件短语，便于告警条展示。
+            const u = String(unit || '');
+            const fmt = (x) => (x == null || x === '') ? '' : String(x);
+            switch (String(op || '').toLowerCase()) {
+                case 'gt': return `> ${fmt(v)}${u}`;
+                case 'gte': return `≥ ${fmt(v)}${u}`;
+                case 'lt': return `< ${fmt(v)}${u}`;
+                case 'lte': return `≤ ${fmt(v)}${u}`;
+                case 'between': return `[${fmt(v)}, ${fmt(v2)}]${u}`;
+                case 'toggle': return v ? '= 是' : '= 否';
+                case 'has_event': return `近 ${fmt(v)} 日发生`;
+                case 'formula': return `(公式)`;
+                default: return '';
+            }
+        }
+
+        // 缓存最近一次筛选请求的完整条件（跨 tab），供列头排序时触发服务端重排。
+        let screenerLastFilterBody = null;
+
         function sortScreenerResults(field) {
             if (screenerSortBy === field) {
                 screenerSortOrder = screenerSortOrder === 'desc' ? 'asc' : 'desc';
@@ -8848,7 +9388,17 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 screenerSortBy = field;
                 screenerSortOrder = 'desc';
             }
-            // Re-sort locally
+            // 有缓存的筛选条件时，走服务端重排，保证全局排序而非仅当前页。
+            if (screenerLastFilterBody) {
+                const sorted = Object.assign({}, screenerLastFilterBody, {
+                    page: 1,
+                    sort_by: screenerSortBy,
+                    sort_order: screenerSortOrder,
+                });
+                applyScreenerFilter(sorted);
+                return;
+            }
+            // 兜底：无缓存时本地排序（仅当前页）。
             const reverse = screenerSortOrder === 'desc';
             screenerResults.sort((a, b) => {
                 const va = a[field] || 0;
@@ -8871,11 +9421,46 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 screenerSelectedCodes.clear();
             }
             renderScreenerResults();
+            updateScreenerBacktestButtons();
         }
 
         function toggleScreenerRow(code, checked) {
             if (checked) screenerSelectedCodes.add(code);
             else screenerSelectedCodes.delete(code);
+            updateScreenerBacktestButtons();
+        }
+
+        // 根据勾选数量更新回测按钮的启用/禁用状态
+        function updateScreenerBacktestButtons() {
+            const count = screenerSelectedCodes.size;
+            const singleBtn = document.getElementById('screener-send-backtest-btn');
+            const batchBtn = document.getElementById('screener-batch-backtest-btn');
+
+            // 单只回测按钮：只有勾选恰好1只时可用
+            if (singleBtn) {
+                if (count === 1) {
+                    singleBtn.disabled = false;
+                    singleBtn.className = 'bg-indigo-700 hover:bg-indigo-600 text-white px-2 py-1 rounded text-xs border border-indigo-500 cursor-pointer';
+                    singleBtn.title = '跳转到首页进行单票回测';
+                } else {
+                    singleBtn.disabled = true;
+                    singleBtn.className = 'bg-slate-700 text-slate-400 px-2 py-1 rounded text-xs border border-slate-600 opacity-50 cursor-not-allowed';
+                    singleBtn.title = count === 0 ? '请先勾选1只股票' : '单只回测需要恰好选择1只股票（当前已选' + count + '只）';
+                }
+            }
+
+            // 批量回测按钮：勾选>=2只时可用
+            if (batchBtn) {
+                if (count >= 2) {
+                    batchBtn.disabled = false;
+                    batchBtn.className = 'bg-cyan-700 hover:bg-cyan-600 text-white px-2 py-1 rounded text-xs border border-cyan-500 cursor-pointer';
+                    batchBtn.title = `对勾选的${count}只股票执行批量回测`;
+                } else {
+                    batchBtn.disabled = true;
+                    batchBtn.className = 'bg-slate-700 text-slate-400 px-2 py-1 rounded text-xs border border-slate-600 opacity-50 cursor-not-allowed';
+                    batchBtn.title = count === 0 ? '请先勾选至少2只股票' : '批量回测需要至少2只股票（当前已选' + count + '只）';
+                }
+            }
         }
 
         function prevScreenerPage() {
@@ -8928,30 +9513,27 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             // 合规前置：未通过免责声明确认时禁止触发回测。
             if (!disclaimerAccepted) { showScreenerToast('请先勾选免责声明并进入系统后再执行回测', 'warning'); return; }
             const codes = getSelectedCodes();
-            if (!codes.length) { showScreenerToast('请先勾选标的', 'warning'); return; }
-            // Use the first selected code for backtest, or let user know
-            const start = document.getElementById('screener-bt-start')?.value;
-            const end = document.getElementById('screener-bt-end')?.value;
-            const capital = parseFloat(document.getElementById('screener-bt-capital')?.value || '1000000');
-            if (!start || !end) { showScreenerToast('请设置回测起止日期', 'warning'); return; }
-            try {
-                const res = await fetch('/api/control/start_backtest', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        stock_code: codes[0],
-                        start, end, capital,
-                        realtime_push: false,
-                    }),
-                });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    showScreenerToast(`已对 ${codes[0]} 启动回测（共选中 ${codes.length} 个标的，当前仅回测首个）`, 'success');
-                } else {
-                    showScreenerToast('回测启动失败: ' + (data.msg || '未知错误'), 'error');
-                }
-            } catch (e) {
-                showScreenerToast('请求失败: ' + e.message, 'error');
+            if (codes.length !== 1) {
+                showScreenerToast('单只回测需要恰好选择1只股票（当前已选' + codes.length + '只）', 'warning');
+                // 确保按钮状态正确
+                updateScreenerBacktestButtons();
+                return;
+            }
+            const code = codes[0];
+            // 关闭筛选弹窗
+            closeScreenerModal();
+            // 填充股票代码到首页输入框
+            const stockInput = document.getElementById('stock-search-input');
+            if (stockInput) {
+                stockInput.value = code;
+            }
+            // 如果AI解析时选择了策略，自动选中
+            if (screenerAiSelectedStrategyIds.length > 0) {
+                selectedStrategyIds = [...screenerAiSelectedStrategyIds];
+                renderStrategyCheckboxes();
+                showScreenerToast(`已填充股票代码 ${code} 并选AI解析时选择的策略，请在首页点击"单票回测"`, 'success');
+            } else {
+                showScreenerToast(`已填充股票代码 ${code}，请在首页选择策略后点击"单票回测"`, 'success');
             }
         }
 
@@ -8982,30 +9564,59 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             }
         }
 
-        async function startScreenerBacktest() {
-            // 合规前置：未通过免责声明确认时禁止触发回测。
+        // 批量回测：从筛选结果页发起，对所有勾选标的执行回测
+        async function startScreenerBatchBacktest() {
             if (!disclaimerAccepted) { showScreenerToast('请先勾选免责声明并进入系统后再执行回测', 'warning'); return; }
-            const codes = getSelectedCodes();
-            if (!codes.length) { showScreenerToast('请先筛选并勾选标的', 'warning'); return; }
+            // 优先使用勾选的标的，否则使用全部筛选结果
+            let codes = getSelectedCodes();
+            if (!codes.length && Array.isArray(screenerResults) && screenerResults.length > 0) {
+                codes = screenerResults.map(r => _resolveDisplayStockCode(r)).filter(c => c && c !== '--');
+            }
+            if (codes.length < 2) {
+                showScreenerToast('批量回测需要至少2只股票', 'warning');
+                return;
+            }
+
             const start = document.getElementById('screener-bt-start')?.value;
             const end = document.getElementById('screener-bt-end')?.value;
             const capital = parseFloat(document.getElementById('screener-bt-capital')?.value || '1000000');
             if (!start || !end) { showScreenerToast('请设置回测起止日期', 'warning'); return; }
+
+            // 使用AI解析时选择的策略，如果没有则使用默认策略
+            const strategyIds = screenerAiSelectedStrategyIds.length > 0 ? screenerAiSelectedStrategyIds : [];
+            const strategyMode = screenerAiSelectedStrategyIds.length > 0 ? 'selected' : 'default';
+
+            const confirmText = `将对 ${codes.length} 个标的执行批量回测${strategyIds.length > 0 ? `（使用AI解析时选择的${strategyIds.length}个策略）` : '（使用默认策略）'}，是否继续？`;
+            if (!confirm(confirmText)) return;
+
             try {
-                const res = await fetch('/api/control/start_backtest', {
+                const res = await fetch('/api/screener/batch_backtest/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        stock_code: codes[0],
-                        start, end, capital,
-                        realtime_push: false,
+                        codes,
+                        strategy_ids: strategyIds,
+                        strategy_mode: strategyMode,
+                        top_n: 0,
+                        start_date: start,
+                        end_date: end,
+                        capital,
+                        max_tasks: 0,
+                        parallel_workers: 1,
+                        scenario_tag: '筛选结果批量回测',
+                        kline_type: '1day',
+                        data_source: ''
                     }),
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    showScreenerToast(`已对 ${codes[0]} 启动回测`, 'success');
+                    showScreenerToast(`批量回测已启动：${codes.length} 个标的`, 'success');
+                    setTimeout(() => {
+                        closeScreenerModal();
+                        openBatchDashboardModal();
+                    }, 1500);
                 } else {
-                    showScreenerToast('回测启动失败: ' + (data.msg || '未知错误'), 'error');
+                    showScreenerToast('批量回测失败: ' + (data.msg || '未知错误'), 'error');
                 }
             } catch (e) {
                 showScreenerToast('请求失败: ' + e.message, 'error');
@@ -9029,14 +9640,17 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             if (action === 'add_pool') {
                 screenerSelectedCodes.clear();
                 screenerSelectedCodes.add(screenerContextRow);
+                updateScreenerBacktestButtons();
                 addToStockPool();
             } else if (action === 'backtest') {
                 screenerSelectedCodes.clear();
                 screenerSelectedCodes.add(screenerContextRow);
+                updateScreenerBacktestButtons();
                 sendToBacktest();
             } else if (action === 'export') {
                 screenerSelectedCodes.clear();
                 screenerSelectedCodes.add(screenerContextRow);
+                updateScreenerBacktestButtons();
                 exportScreenerCSV();
             } else if (action === 'detail') {
                 showScreenerToast('标的详情（Phase 2 支持）：' + screenerContextRow, 'info');
@@ -9258,13 +9872,26 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
         }
 
         function openScreenerAIParser() {
+            // 确保条件筛选主弹窗也被打开并初始化筛选控件。
+            // 当用户从顶部”智能选股”按钮直接进入时，screener-modal 可能尚未打开，
+            // 导致筛选控件 DOM 元素不存在，AI 条件无法映射到控件。
+            const screenerModal = document.getElementById('screener-modal');
+            if (screenerModal) {
+                screenerModal.classList.remove('hidden');
+                screenerModal.classList.add('flex');
+                // 初始化筛选控件所需的 catalog 和日期。
+                loadScreenerFilterOptions();
+                loadScreenerCatalog();
+                loadScreenerDataSourceDoc();
+                setDefaultBacktestDates();
+            }
             const modal = document.getElementById('screener-ai-parser-modal');
             if (!modal) return;
             modal.classList.remove('hidden');
             modal.classList.add('flex');
             document.getElementById('screener-ai-result').classList.add('hidden');
             document.getElementById('screener-ai-apply-btn').classList.add('hidden');
-            setScreenerAiStatus('idle', '请输入策略描述后点击"开始解析"');
+            setScreenerAiStatus('idle', '请输入策略描述后点击”开始解析”');
             document.getElementById('screener-ai-input').value = '';
             aiParsedData = null;
             aiPromptTrace = { system_prompt: '', user_prompt: '' };
@@ -9273,7 +9900,7 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             renderScreenerStrategyMultiSelect();
             // 预加载系统提示词模板，并初始化用户提示词展示。
             loadScreenerPromptTemplates();
-            // 加载“选股策略示例提示词”，并预填首条示例，用户可继续修改。
+            // 加载”选股策略示例提示词”，并预填首条示例，用户可继续修改。
             loadScreenerPromptExamples();
             onScreenerAiInputChanged();
             // 打开弹窗时刷新历史记录，便于用户查看最近交互。
@@ -9521,12 +10148,18 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             startScreenerAiProgress('parse', 1, 3, '提交解析请求');
             setScreenerAiStatus('running', '大模型解析中...', true);
             setScreenerAiActionRunning(true);
+            // 展示遮罩层，仅显示阶段1（AI解析），因为此按钮不涉及行情获取
+            showScreenerLoading('AI 正在理解你的策略...', '大模型正在解析你的提示词，提取筛选条件');
+            _setScreenerLoadingPhase(1);
 
             try {
                 const res = await fetch('/api/screener/parse_strategy', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ description: text }),
+                    body: JSON.stringify({
+                        description: text,
+                        example_id: String(document.getElementById('screener-ai-example-select')?.value || '').trim(),
+                    }),
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
@@ -9545,9 +10178,15 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     showScreenerToast('AI解析已完成，可直接筛选或生成策略', 'success');
                     loadScreenerAiHistory();
                 } else {
-                    const msg = '解析失败: ' + (data.msg || '未知错误');
+                    const rawLlm = String(data?.raw_llm || '').trim();
+                    let msg = '解析失败: ' + (data.msg || '未知错误');
+                    // 如果后端给出了模型原始输出片段，直接拼到状态区，便于判断是模型没返回 JSON 还是返回了自然语言。
+                    if (rawLlm) {
+                        const snippet = rawLlm.length > 400 ? rawLlm.slice(0, 400) + '...' : rawLlm;
+                        msg += '\n[模型原始输出] ' + snippet;
+                    }
                     setScreenerAiStatus('error', msg);
-                    showScreenerToast(msg, 'error');
+                    showScreenerToast(msg, 'error', 8000);
                 }
             } catch (e) {
                 const msg = '请求失败: ' + e.message;
@@ -9555,6 +10194,7 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 showScreenerToast(msg, 'error');
             } finally {
                 setScreenerAiActionRunning(false);
+                hideScreenerLoading();
             }
         }
 
@@ -9574,9 +10214,32 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 return false;
             }
 
+            // 保存用户选择的策略，供后续回测使用
+            screenerAiSelectedStrategyIds = _resolveScreenerBatchStrategyIdsByMode();
+
             startScreenerAiProgress('ai_filter', 1, 4, '提交筛选请求');
             setScreenerAiStatus('running', 'AI一步筛选中...', true);
             setScreenerAiActionRunning(true);
+
+            // === 阶段1：AI解析策略 ===
+            showScreenerLoading('AI 正在理解你的策略...', '大模型正在解析你的提示词，提取筛选条件');
+            _setScreenerLoadingPhase(1);
+
+            // 阶段过渡定时器：在请求等待期间，按时间节奏切换阶段展示
+            // 后端 ai_filter 内部依次执行 LLM解析 → 行情获取 → 条件筛选，前端无法精确感知
+            // 通过定时器模拟阶段过渡，让用户清晰看到每个步骤都在推进
+            const phaseTimer2 = setTimeout(() => {
+                advanceScreenerAiProgress(2, '获取行情数据');
+                setScreenerAiStatus('running', '正在获取全量行情数据...', true);
+                updateScreenerLoading('正在获取行情数据...', '从 pytdx/DuckDB/AkShare 拉取最新行情、财务和技术指标');
+                _setScreenerLoadingPhase(2);
+            }, 2500);
+            const phaseTimer3 = setTimeout(() => {
+                advanceScreenerAiProgress(3, '执行条件筛选');
+                setScreenerAiStatus('running', '正在根据条件筛选股票...', true);
+                updateScreenerLoading('正在筛选股票...', '根据 AI 解析的条件，对全量股票执行条件匹配');
+                _setScreenerLoadingPhase(3);
+            }, 6000);
 
             try {
                 const res = await fetch('/api/screener/ai_filter', {
@@ -9591,9 +10254,18 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                         logic_mode: document.getElementById('screener-logic-mode')?.value || 'AND',
                     }),
                 });
+                // 请求已返回，清除未触发的阶段定时器
+                clearTimeout(phaseTimer2);
+                clearTimeout(phaseTimer3);
+
+                // === 阶段4：渲染结果 ===
+                advanceScreenerAiProgress(4, '渲染结果');
+                setScreenerAiStatus('running', '正在渲染筛选结果...', true);
+                updateScreenerLoading('正在渲染结果...', 'AI 筛选完成，正在解析返回数据并生成表格');
+                _setScreenerLoadingPhase(4);
+
                 const data = await res.json();
                 if (data.status === 'success') {
-                    advanceScreenerAiProgress(2, '处理AI筛选结果');
                     // 同步AI解析结果区，便于用户理解筛选逻辑和执行规则。
                     aiParsedData = data.parsed || null;
                     const trace = data.prompt_trace || {};
@@ -9607,11 +10279,9 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                             screen_conditions: aiParsedData.screen_conditions || [],
                             execution_rules: aiParsedData.execution_rules || [],
                         });
-                        document.getElementById('screener-ai-apply-btn').classList.remove('hidden');
                     }
 
                     // 将筛选结果直接渲染到主结果表格。
-                    advanceScreenerAiProgress(3, '渲染筛选结果');
                     const result = data.filter_result || {};
                     screenerResults = result.data || [];
                     // AI一步筛选同样写入统一分页元数据，保持翻页显示一致。
@@ -9622,11 +10292,19 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     autoSelectFirstScreenerCode();
                     // 自动补齐回测参数，避免用户遗漏日期或资金字段。
                     applyAiBacktestDefaults();
+                    // 渲染数据缺失告警：用户策略里"PE<20"等条件命中空字段时立刻提示。
+                    renderScreenerUnsupportedConditions(result.unsupported_conditions || [], result.field_coverage || null);
                     renderScreenerResults();
-                    advanceScreenerAiProgress(4, '完成');
+
                     setScreenerAiStatus('success', `筛选完成，共 ${Number(result.total || 0)} 条`);
                     showScreenerToast(`筛选已生效，共 ${Number(result.total || 0)} 条`, 'success');
                     loadScreenerAiHistory();
+
+                    // 自动关闭AI解析弹窗，让用户直接看到筛选结果
+                    setTimeout(() => {
+                        closeScreenerAIParser();
+                    }, 1000);
+
                     return true;
                 } else {
                     const msg = '一步筛选失败: ' + (data.msg || '未知错误');
@@ -9635,22 +10313,26 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     return false;
                 }
             } catch (e) {
+                clearTimeout(phaseTimer2);
+                clearTimeout(phaseTimer3);
                 const msg = '请求失败: ' + e.message;
                 setScreenerAiStatus('error', msg);
                 showScreenerToast(msg, 'error');
                 return false;
             } finally {
                 setScreenerAiActionRunning(false);
+                hideScreenerLoading();
             }
         }
 
         function autoSelectFirstScreenerCode() {
-            // 自动选中首个结果，兼容“当前回测接口仅支持单标的”的限制。
+            // 自动选中首个结果，兼容”当前回测接口仅支持单标的”的限制。
             screenerSelectedCodes.clear();
             if (Array.isArray(screenerResults) && screenerResults.length > 0) {
                 const code = _resolveDisplayStockCode(screenerResults[0]);
                 if (code && code !== '--') screenerSelectedCodes.add(code);
             }
+            updateScreenerBacktestButtons();
         }
 
         function applyAiBacktestDefaults() {
@@ -9660,21 +10342,6 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             if (capitalInput && !String(capitalInput.value || '').trim()) {
                 capitalInput.value = '1000000';
             }
-        }
-
-        function _resolveScreenerBatchCodesByTopN() {
-            // 优先使用勾选代码；无勾选时回退到当前筛选结果列表。
-            const pickedCodes = getSelectedCodes();
-            let codes = Array.isArray(pickedCodes) && pickedCodes.length
-                ? pickedCodes.map(x => String(x || '').trim()).filter(Boolean)
-                : (Array.isArray(screenerResults) ? screenerResults.map(r => _resolveDisplayStockCode(r)).filter(code => code && code !== '--') : []);
-            // 去重并保持输入顺序。
-            codes = Array.from(new Set(codes));
-            const topN = Number(document.getElementById('screener-ai-batch-topn')?.value || '0');
-            if (Number.isFinite(topN) && topN > 0) {
-                codes = codes.slice(0, Math.floor(topN));
-            }
-            return codes;
         }
 
         function _resolveScreenerBatchStrategyIdsByMode() {
@@ -9703,24 +10370,6 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             return Array.from(new Set(selected));
         }
 
-        async function runAIScreenerAndStartBacktest() {
-            // 一键链路：先筛选，再启动回测，减少用户点击成本。
-            await runAIScreenerDirectly();
-            if (!Array.isArray(screenerResults) || screenerResults.length === 0) {
-                showScreenerToast('筛选结果为空，无法启动回测', 'warning');
-                return;
-            }
-            // 自动回测前给用户确认，避免误触发回测任务。
-            const firstCode = _resolveDisplayStockCode(screenerResults[0]);
-            if (!firstCode || firstCode === '--') {
-                showScreenerToast('未获取到有效标的代码，无法启动回测', 'warning');
-                return;
-            }
-            const ok = confirm(`将使用首个标的 ${firstCode} 启动回测，是否继续？`);
-            if (!ok) return;
-            await startScreenerBacktest();
-        }
-
         async function runAIScreenerAndStartBatchBacktest() {
             // 合规前置：未通过免责声明确认时禁止触发回测。
             if (!disclaimerAccepted) { showScreenerToast('请先勾选免责声明并进入系统后再执行回测', 'warning'); return; }
@@ -9731,8 +10380,8 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 return;
             }
 
-            // 根据TopN配置生成实际批量标的列表。
-            const codes = _resolveScreenerBatchCodesByTopN();
+            // 获取所有筛选结果的股票代码
+            const codes = screenerResults.map(r => _resolveDisplayStockCode(r)).filter(code => code && code !== '--');
             if (!codes.length) {
                 showScreenerToast('未获取到有效标的代码，无法启动批量回测', 'warning');
                 return;
@@ -9749,16 +10398,8 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 return;
             }
 
-            const workers = Number(document.getElementById('batch-run-workers')?.value || '1');
-            const maxTasks = Number(document.getElementById('batch-run-max-tasks')?.value || '0');
-            const confirmText = `将使用 ${codes.length} 个标的、${strategyIds.length || 1} 个策略生成批量任务并启动执行，是否继续？`;
+            const confirmText = `将使用 ${codes.length} 个标的、${strategyIds.length || 1} 个策略执行批量回测，是否继续？`;
             if (!confirm(confirmText)) return;
-
-            const btn = document.getElementById('screener-ai-direct-batch-btn');
-            startScreenerAiProgress('batch_start', 1, 3, '创建批量任务');
-            setScreenerAiStatus('running', '正在创建批量任务并启动...', true);
-            btn.disabled = true;
-            btn.classList.add('opacity-50', 'cursor-not-allowed');
 
             try {
                 const res = await fetch('/api/screener/batch_backtest/start', {
@@ -9768,51 +10409,27 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                         codes,
                         strategy_ids: strategyIds,
                         strategy_mode: strategyMode,
-                        top_n: Number(document.getElementById('screener-ai-batch-topn')?.value || '0'),
                         start_date: start,
                         end_date: end,
                         capital,
-                        max_tasks: Number.isFinite(maxTasks) ? Math.max(0, Math.floor(maxTasks)) : 0,
-                        parallel_workers: Number.isFinite(workers) ? Math.max(1, Math.floor(workers)) : 1,
                         scenario_tag: '条件筛选批量回测',
                         kline_type: '1day',
                         data_source: ''
                     }),
                 });
                 const data = await res.json();
-                if (!res.ok || String(data.status || '').toLowerCase() !== 'success') {
-                    throw new Error(data.msg || '批量回测启动失败');
+                if (data.status === 'success') {
+                    showScreenerToast(`批量回测已启动：${codes.length} 个标的`, 'success');
+                    setTimeout(() => {
+                        closeScreenerAIParser();
+                        closeScreenerModal();
+                        openBatchDashboardModal();
+                    }, 1500);
+                } else {
+                    showScreenerToast('批量回测失败: ' + (data.msg || '未知错误'), 'error');
                 }
-
-                // 同步批量面板参数，便于用户立即查看任务进度。
-                advanceScreenerAiProgress(2, '同步任务面板');
-                const tasksCsv = String(data.tasks_csv || '').trim();
-                const batchNo = String(data.batch_no || '').trim();
-                const runTasksInput = document.getElementById('batch-run-tasks-csv');
-                if (runTasksInput && tasksCsv) runTasksInput.value = tasksCsv;
-                const runFilterInput = document.getElementById('batch-run-batch-filter');
-                if (runFilterInput && batchNo) runFilterInput.value = batchNo;
-                const bdmTasksInput = document.getElementById('bdm-tasks-csv');
-                if (bdmTasksInput && tasksCsv) bdmTasksInput.value = tasksCsv;
-                const bdmFilterInput = document.getElementById('bdm-batch-filter');
-                if (bdmFilterInput && batchNo) bdmFilterInput.value = batchNo;
-
-                advanceScreenerAiProgress(3, '提交执行完成');
-                setScreenerAiStatus('success', `批量回测已启动，任务 ${Number(data.task_count || 0)} 条`);
-                logMessage('SYSTEM', `条件筛选批量回测已启动: tasks=${Number(data.task_count || 0)} batch=${batchNo || '--'} pid=${data.pid || '--'}`, 'warning');
-                openBatchDashboardModal();
-                refreshBatchRunStatus();
-                if (typeof refreshBatchRunStatusForDashboard === 'function') {
-                    refreshBatchRunStatusForDashboard();
-                }
-                showScreenerToast(`批量回测已启动，任务 ${Number(data.task_count || 0)} 条`, 'success');
             } catch (e) {
-                const msg = `批量回测失败: ${e.message}`;
-                setScreenerAiStatus('error', msg);
-                showScreenerToast(msg, 'error');
-            } finally {
-                btn.disabled = false;
-                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+                showScreenerToast('请求失败: ' + e.message, 'error');
             }
         }
 
@@ -10036,24 +10653,20 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
             const resultDiv = document.getElementById('screener-ai-result');
             resultDiv.classList.remove('hidden');
 
-            // 渲染筛选条件
+            // 渲染筛选条件：升级成可编辑卡片，支持修改数值、删除、查看 confidence。
             const screenDiv = document.getElementById('screener-ai-screen-conditions');
             const conditions = normalizeConditionList(parsedData?.screen_conditions);
             if (conditions.length === 0) {
                 screenDiv.innerHTML = '<div class="text-slate-500">无可直接执行的筛选条件</div>';
             } else {
                 let html = '';
-                conditions.forEach(c => {
-                    const enabled = c.enabled;
-                    const icon = enabled ? '<i class="fa-solid fa-check text-emerald-400 mr-1"></i>' : '<i class="fa-solid fa-clock text-slate-500 mr-1"></i>';
-                    const color = enabled ? 'text-emerald-300' : 'text-slate-500';
-                    const opDesc = formatOperatorDesc(c.operator, c.value, c.value2, c.unit);
-                    html += `<div class="flex items-center ${color}"><span class="w-3 shrink-0">${icon}</span><span>${c.label}</span><span class="ml-1 text-slate-500">(${opDesc})</span></div>`;
+                conditions.forEach((c, idx) => {
+                    html += _renderAIConditionCard(c, idx);
                 });
                 screenDiv.innerHTML = html;
             }
 
-            // 渲染执行规则
+            // 渲染执行规则（保持只读，因为用户一般不修订这部分）。
             const execDiv = document.getElementById('screener-ai-execution-rules');
             const rules = normalizeRuleList(parsedData?.execution_rules);
             if (rules.length === 0) {
@@ -10068,6 +10681,129 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     html += `<div class="flex items-start text-slate-300"><span class="w-3 shrink-0">${icon}</span><span>${desc}</span></div>`;
                 });
                 execDiv.innerHTML = html;
+            }
+        }
+
+        // 渲染单个可编辑条件卡片：confidence 徽章 + 条件描述 + ✏️编辑 + 🗑️删除
+        function _renderAIConditionCard(cond, idx) {
+            const enabled = !!cond.enabled;
+            const confidence = _clampAIConfidence(cond.confidence);
+            // confidence 分档配色：>=0.7 绿；>=0.5 黄；<0.5 红
+            let dotColor = 'bg-rose-500';
+            let textColor = 'text-rose-300';
+            if (confidence >= 0.7) { dotColor = 'bg-emerald-500'; textColor = 'text-emerald-300'; }
+            else if (confidence >= 0.5) { dotColor = 'bg-amber-500'; textColor = 'text-amber-300'; }
+            const rowColor = enabled ? 'text-slate-200' : 'text-slate-500 line-through';
+            const opDesc = formatOperatorDesc(cond.operator, cond.value, cond.value2, cond.unit);
+            const icon = enabled
+                ? '<i class="fa-solid fa-check text-emerald-400"></i>'
+                : '<i class="fa-solid fa-clock text-slate-500"></i>';
+            const cardBg = enabled ? 'bg-slate-900/60 border-slate-700' : 'bg-slate-950/60 border-slate-800';
+            const enableHint = enabled ? '' : '<span class="ml-2 text-[10px] text-amber-400/80">(未启用，需回测执行)</span>';
+            return `<div class="border ${cardBg} rounded px-2.5 py-1.5" data-condition-idx="${idx}">
+                <div class="flex items-center gap-2">
+                    <span class="w-3 shrink-0">${icon}</span>
+                    <span class="w-1.5 h-1.5 rounded-full ${dotColor}" title="大模型置信度 ${confidence.toFixed(2)}"></span>
+                    <span class="${textColor} text-[10px] font-mono shrink-0">${confidence.toFixed(2)}</span>
+                    <span class="flex-1 ${rowColor}">
+                        <span class="font-bold text-white">${cond.label || cond.key}</span>
+                        <span class="text-slate-400 ml-1">${opDesc}</span>
+                        ${enableHint}
+                    </span>
+                    <button type="button" onclick="_toggleAIConditionEdit(${idx})" class="text-amber-300 hover:text-amber-100 px-1.5" title="修改数值">
+                        <i class="fa-solid fa-pen-to-square"></i>
+                    </button>
+                    <button type="button" onclick="_deleteAICondition(${idx})" class="text-rose-400 hover:text-rose-200 px-1.5" title="移除该条件">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </div>
+                <div id="ai-condition-edit-${idx}" class="hidden mt-1.5 pl-5 flex flex-wrap items-center gap-1.5">
+                    ${_renderAIConditionInputs(cond, idx)}
+                </div>
+            </div>`;
+        }
+
+        // 根据 operator 类型渲染不同的输入框（between 需要 value+value2，toggle 不需要）
+        function _renderAIConditionInputs(cond, idx) {
+            const op = String(cond.operator || '').toLowerCase();
+            const unit = cond.unit || '';
+            if (op === 'toggle') {
+                const checked = !!cond.value ? 'checked' : '';
+                return `<label class="flex items-center gap-1 text-slate-300 text-[11px]">
+                    <input type="checkbox" ${checked} onchange="_updateAIConditionValue(${idx}, 'value', this.checked)" />
+                    <span>启用</span>
+                </label>`;
+            }
+            if (op === 'between') {
+                return `
+                    <input type="number" step="any" value="${cond.value ?? ''}" placeholder="最小值"
+                        class="bg-slate-800 border border-slate-600 rounded px-1.5 py-0.5 text-[11px] text-white w-20"
+                        onchange="_updateAIConditionValue(${idx}, 'value', this.value)" />
+                    <span class="text-slate-500">~</span>
+                    <input type="number" step="any" value="${cond.value2 ?? ''}" placeholder="最大值"
+                        class="bg-slate-800 border border-slate-600 rounded px-1.5 py-0.5 text-[11px] text-white w-20"
+                        onchange="_updateAIConditionValue(${idx}, 'value2', this.value)" />
+                    <span class="text-slate-500 text-[11px]">${unit}</span>`;
+            }
+            // 其他数值类操作符：单 value
+            return `
+                <input type="number" step="any" value="${cond.value ?? ''}" placeholder="数值"
+                    class="bg-slate-800 border border-slate-600 rounded px-1.5 py-0.5 text-[11px] text-white w-24"
+                    onchange="_updateAIConditionValue(${idx}, 'value', this.value)" />
+                <span class="text-slate-500 text-[11px]">${unit}</span>`;
+        }
+
+        // clamp confidence 到 [0, 1]，缺失默认 0.7
+        function _clampAIConfidence(v) {
+            const n = Number(v);
+            if (!Number.isFinite(n)) return 0.7;
+            if (n < 0) return 0;
+            if (n > 1) return 1;
+            return n;
+        }
+
+        // 切换某条条件的编辑面板显隐
+        function _toggleAIConditionEdit(idx) {
+            const panel = document.getElementById(`ai-condition-edit-${idx}`);
+            if (!panel) return;
+            panel.classList.toggle('hidden');
+        }
+
+        // 更新某条条件的 value 或 value2，就地修改 aiParsedData 后重渲染描述区
+        function _updateAIConditionValue(idx, field, rawValue) {
+            if (!aiParsedData || !Array.isArray(aiParsedData.screen_conditions)) return;
+            const cond = aiParsedData.screen_conditions[idx];
+            if (!cond) return;
+            // 数值字段做类型转换：能转 number 就转，否则保留字符串（兼容公式等场景）。
+            let v = rawValue;
+            if (field === 'value' || field === 'value2') {
+                const s = String(rawValue ?? '').trim();
+                if (s === '') {
+                    v = null;
+                } else {
+                    const n = Number(s);
+                    v = Number.isFinite(n) ? n : s;
+                }
+            }
+            cond[field] = v;
+            // 重新渲染条件描述（不重新渲染整个卡片，避免打断输入焦点）。
+            const card = document.querySelector(`[data-condition-idx="${idx}"]`);
+            if (!card) return;
+            const descSpan = card.querySelector('.flex-1');
+            if (descSpan) {
+                const opDesc = formatOperatorDesc(cond.operator, cond.value, cond.value2, cond.unit);
+                descSpan.innerHTML = `<span class="font-bold text-white">${cond.label || cond.key}</span><span class="text-slate-400 ml-1">${opDesc}</span>`;
+            }
+        }
+
+        // 删除某条条件，从 aiParsedData 中移除并重新渲染整个条件列表
+        function _deleteAICondition(idx) {
+            if (!aiParsedData || !Array.isArray(aiParsedData.screen_conditions)) return;
+            aiParsedData.screen_conditions.splice(idx, 1);
+            // 重新渲染
+            renderAIParsedResult(aiParsedData);
+            if (aiParsedData.screen_conditions.length === 0) {
+                showScreenerToast('所有条件已删除，请重新描述或关闭弹窗', 'warning');
             }
         }
 
@@ -10224,8 +10960,105 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
 
             // 关闭弹窗，自动执行筛选
             closeScreenerAIParser();
-            // 应用AI条件后强制回到第一页，避免沿用旧页码造成“当前页为空”。
+            // 应用AI条件后强制回到第一页，避免沿用旧页码造成”当前页为空”。
             screenerPage = 1;
+
+            // 同步 AI 解析出的排序规则（execution_rules.sort）到前端排序状态，
+            // 让"确认并筛选"与"直接出选股结果"在排序行为上保持一致。
+            const aiExecRules = aiParsedData?.execution_rules || {};
+            const aiSort = (aiExecRules.sort && typeof aiExecRules.sort === 'object')
+                ? aiExecRules.sort
+                : null;
+            if (aiSort && aiSort.key) {
+                // 兼容中英文 key：成交额→amount，涨跌幅→change_pct
+                const sortKeyMap = { '成交额': 'amount', '涨跌幅': 'change_pct', '成交量': 'volume' };
+                screenerSortBy = sortKeyMap[aiSort.key] || aiSort.key;
+                screenerSortOrder = (aiSort.order || 'desc').toLowerCase();
+            }
+            // 同步 AI 解析出的 top_n 到每页条数，让"前30只"这类数量约束生效。
+            const aiTopN = Number(aiExecRules.top_n);
+            if (aiTopN > 0 && aiTopN <= 500) {
+                screenerPageSize = aiTopN;
+            }
+
+            // 命中内置示例时，直接走后端一步筛选路径，避免前端映射丢失条件/排序/数量限制。
+            const selectedExampleId = String(document.getElementById('screener-ai-example-select')?.value || '').trim();
+            if (selectedExampleId && ['mainboard_base_pool', 'mainboard_strict_pool'].includes(selectedExampleId)) {
+                const promptText = String(document.getElementById('screener-ai-input')?.value || '').trim();
+                const body = {
+                    prompt: promptText,
+                    example_id: selectedExampleId,
+                    page: 1,
+                    page_size: screenerPageSize || 50,
+                    logic_mode: document.getElementById('screener-logic-mode')?.value || 'AND',
+                };
+                showScreenerLoading('正在执行筛选...', '使用内置示例参数查询股票数据');
+                fetch('/api/screener/ai_filter', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                })
+                .then(res => res.json())
+                .then(data => {
+                    updateScreenerLoading('正在渲染结果...', `筛选完成，正在生成表格`);
+                    if (data.status === 'success') {
+                        const result = data.filter_result || {};
+                        screenerResults = result.data || [];
+                        screenerTotal = Number(result.total || 0);
+                        screenerTotalPages = Math.max(1, Number(result.total_pages || 1));
+                        screenerPage = Math.min(Math.max(1, Number(result.page || 1)), screenerTotalPages);
+                        autoSelectFirstScreenerCode();
+                        applyAiBacktestDefaults();
+                        renderScreenerUnsupportedConditions(result.unsupported_conditions || [], result.field_coverage || null);
+                        renderScreenerResults();
+                        setScreenerAiStatus('success', `筛选完成，共 ${screenerTotal} 条`);
+                        showScreenerToast(`已按内置示例筛选，共 ${screenerTotal} 条`, 'success');
+                        loadScreenerAiHistory();
+                    } else {
+                        showScreenerToast('筛选失败: ' + (data.msg || '未知错误'), 'error');
+                    }
+                })
+                .catch(e => showScreenerToast('请求失败: ' + e.message, 'error'))
+                .finally(() => hideScreenerLoading());
+                return;
+            }
+
+            // 跨 tab 检测：若 AI 条件涵盖多个 tab，直接构建完整请求体，
+            // 避免只发送当前 activeTab 的条件导致其他 tab 条件丢失。
+            const tabsInUse = new Set(enabledConds.map(c => c.tab || 'market'));
+            if (tabsInUse.size > 1) {
+                const overrideBody = {
+                    logic_mode: document.getElementById('screener-logic-mode')?.value || 'AND',
+                    page: 1,
+                    page_size: screenerPageSize || 50,
+                    sort_by: screenerSortBy || null,
+                    sort_order: screenerSortOrder || 'desc',
+                };
+                const byTab = {};
+                enabledConds.forEach(cond => {
+                    const t = cond.tab || 'market';
+                    if (!byTab[t]) byTab[t] = [];
+                    byTab[t].push({
+                        key: cond.key,
+                        tab: t,
+                        operator: cond.operator,
+                        label: cond.label || cond.key,
+                        value: cond.value,
+                        value2: cond.value2,
+                        unit: cond.unit || '',
+                        enabled: true,
+                    });
+                });
+                if (byTab.market) overrideBody.market_conditions = byTab.market;
+                if (byTab.technical) overrideBody.technical_conditions = byTab.technical;
+                if (byTab.financial) overrideBody.financial_conditions = byTab.financial;
+
+                closeScreenerAIParser();
+                setTimeout(() => applyScreenerFilter(overrideBody), 300);
+                showScreenerToast(`已应用跨 ${tabsInUse.size} 个 tab 的条件并开始筛选`, 'success');
+                return;
+            }
+
             setTimeout(() => applyScreenerFilter(), 300);
             showScreenerToast('已应用可执行条件并开始筛选', 'success');
         }
@@ -13067,8 +13900,13 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
         }
 
         async function testDataProviderLlmConnectivity() {
-            // 工部数据源中“通用模型”对应 data_provider.llm_* 配置域。
+            // 工部数据源中”通用模型”对应 data_provider.llm_* 配置域。
             await testLlmConnectivityByScope('data_provider', 'config-llm-general-test', 'config_center_data_provider');
+        }
+
+        async function testScreenerLlmConnectivity() {
+            // 条件筛选模型对应 data_provider.screener_llm_* 配置域。
+            await testLlmConnectivityByScope('screener', 'config-llm-screener-test', 'config_center_screener');
         }
 
         async function testWebhookDelivery() {

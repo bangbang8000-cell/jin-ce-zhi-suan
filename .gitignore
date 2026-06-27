@@ -49,3 +49,7 @@ data/任务生成_场景池.csv
 data/批量回测结果.csv
 data/策略汇总评分.csv
 data/批量回测结果.csv
+docs/GRAPHIFY-复用与部署教程.md
+
+# Graphify（大文件不提交，manifest/report 可选共享）
+graphify-out/

@@ -17,10 +17,16 @@ class TushareProvider:
     """
     def __init__(self, token=None, event_callback=None):
         # Default to a placeholder token if none provided. User must replace this.
-        self.token = token
         self.event_callback = event_callback
         self.last_error = ""
         cfg = ConfigLoader.reload()
+
+        # 从配置中读取 token（如果参数未提供）
+        if token is None:
+            self.token = cfg.get("data_provider.tushare_token", "")
+        else:
+            self.token = token
+
         self._cache_enabled = bool(cfg.get("data_provider.local_cache_enabled", True))
         cache_dir = str(cfg.get("data_provider.local_cache_dir", "data/history/cache") or "data/history/cache")
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -41,16 +47,15 @@ class TushareProvider:
         self._latest_bar_cache = {}
         self._cn_tz = ZoneInfo("Asia/Shanghai") if ZoneInfo is not None else timezone(timedelta(hours=8))
         self.last_error = ""
-        self._tushare_http_url = self._resolve_tushare_http_url(cfg)
-        import tushare.pro.client as client
-        client.DataApi._DataApi__http_url = self._tushare_http_url
+
+        # 初始化 Tushare API
         if self.token:
             ts.set_token(self.token)
             self.pro = ts.pro_api()
         else:
             self.pro = None
             self.last_error = "tushare_token 未配置"
-            print("⚠️ Warning: Tushare Token not provided. Please initialize with a valid token.")
+            print("Warning: Tushare Token not provided. Please initialize with a valid token.")
 
     def _resolve_tushare_http_url(self, cfg):
         raw = cfg.get("data_provider.tushare_api_url", "http://tushare.xyz")
@@ -912,3 +917,98 @@ class TushareProvider:
             err_text = str(e)
             self.last_error = err_text
             return False, err_text
+
+    def fetch_financial_data(self, codes: list, date: str) -> dict:
+        """
+        批量获取财务数据
+
+        Args:
+            codes: 股票代码列表（如 ["600000.SH", "000001.SZ"]）
+            date: 查询日期（如 "2026-06-23"）
+
+        Returns:
+            {
+                "600000.SH": {
+                    "pe_ttm": 8.5,
+                    "pb": 0.6,
+                    "ps_ttm": 2.3,
+                    "roe": 12.5,
+                    "roa": 1.2,
+                    "gross_margin": 45.2,
+                    "net_margin": 28.3,
+                    "revenue_yoy": 15.6,
+                    "profit_yoy": 18.9
+                },
+                ...
+            }
+        """
+        if not self.pro:
+            self.last_error = "tushare_token 未配置"
+            return {}
+
+        if not codes:
+            return {}
+
+        # 转换日期格式：2026-06-23 -> 20260623
+        trade_date = date.replace("-", "")
+
+        result = {}
+
+        try:
+            # 1. 获取估值指标（PE/PB/PS）- 从 daily_basic，按 trade_date 获取所有股票
+            df_basic = self.pro.daily_basic(
+                trade_date=trade_date,
+                fields='ts_code,pe_ttm,pb,ps_ttm'
+            )
+
+            if df_basic is not None and not df_basic.empty:
+                for _, row in df_basic.iterrows():
+                    code = row['ts_code']
+                    # 只保留请求的股票
+                    if code in codes:
+                        if code not in result:
+                            result[code] = {}
+                        # 估值指标
+                        if pd.notna(row.get('pe_ttm')):
+                            result[code]['pe_ttm'] = float(row['pe_ttm'])
+                        if pd.notna(row.get('pb')):
+                            result[code]['pb'] = float(row['pb'])
+                        if pd.notna(row.get('ps_ttm')):
+                            result[code]['ps_ttm'] = float(row['ps_ttm'])
+
+            # 2. 获取财务指标（ROE/ROA/毛利率/净利率/营收同比/利润同比）- 从 fina_indicator
+            # fina_indicator 需要逐个股票查询
+            for code in codes:
+                try:
+                    df_fina = self.pro.fina_indicator(
+                        ts_code=code,
+                        fields='ts_code,end_date,roe,roa,grossprofit_margin,netprofit_margin,netprofit_yoy'
+                    )
+
+                    if df_fina is not None and not df_fina.empty:
+                        # 取最新一期的数据
+                        latest = df_fina.iloc[0]
+                        if code not in result:
+                            result[code] = {}
+                        # 盈利指标
+                        if pd.notna(latest.get('roe')):
+                            result[code]['roe'] = float(latest['roe'])
+                        if pd.notna(latest.get('roa')):
+                            result[code]['roa'] = float(latest['roa'])
+                        if pd.notna(latest.get('grossprofit_margin')):
+                            result[code]['gross_margin'] = float(latest['grossprofit_margin'])
+                        if pd.notna(latest.get('netprofit_margin')):
+                            result[code]['net_margin'] = float(latest['netprofit_margin'])
+                        if pd.notna(latest.get('netprofit_yoy')):
+                            result[code]['profit_yoy'] = float(latest['netprofit_yoy'])
+                except Exception:
+                    # 单个股票查询失败不影响其他股票
+                    continue
+
+            self.last_error = ""
+            return result
+
+        except Exception as e:
+            err_text = str(e)
+            self.last_error = f"fetch_financial_data_failed date={date} err={err_text}"
+            return result  # 返回已获取的部分数据

@@ -5,6 +5,7 @@
 """
 
 import json
+import logging
 import os
 import re
 import time
@@ -13,6 +14,9 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
 try:
     # AkShare 作为 DuckDB 缺失时的行情兜底来源；若环境未安装则安全降级。
     import akshare as ak
@@ -20,9 +24,48 @@ except Exception:
     ak = None
 
 from src.utils.stock_manager import stock_manager
+from src.utils.screener_progress import progress_log
 
 CACHE_DIR = os.path.join("data", "screener_cache")
 CACHE_TTL_SEC = 300  # 5 分钟
+
+
+def _get_latest_trading_date() -> str:
+    """获取最近一个交易日的日期（YYYY-MM-DD 格式）。
+
+    简单规则：
+    - 如果当前是交易时间（周一到周五 9:30-15:00），返回今天
+    - 如果当前是交易日的非交易时间（如 15:00 之后），返回今天
+    - 如果当前是周六，返回周五
+    - 如果当前是周日，返回周五
+    注意：不考虑节假日，如需精确判断需要交易日历。
+    """
+    now = datetime.now()
+    weekday = now.weekday()  # 0=周一, 6=周日
+
+    # 周六 -> 周五
+    if weekday == 5:
+        return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    # 周日 -> 周五
+    elif weekday == 6:
+        return (now - timedelta(days=2)).strftime("%Y-%m-%d")
+    # 周一到周五 -> 今天
+    else:
+        return now.strftime("%Y-%m-%d")
+
+
+def _in_trading_hours(now: Optional[datetime] = None) -> bool:
+    """判断是否在 A 股连续竞价时段（9:25-11:30，13:00-15:05），且非周末。
+
+    不考虑节假日；节假日误判为交易日的后果只是多发一次网络请求，可接受。
+    """
+    now = now or datetime.now()
+    if now.weekday() >= 5:
+        return False
+    t = now.hour * 60 + now.minute
+    morning = 9 * 60 + 25 <= t <= 11 * 60 + 30
+    afternoon = 13 * 60 <= t <= 15 * 60 + 5
+    return morning or afternoon
 
 
 def _ensure_cache_dir():
@@ -77,6 +120,163 @@ def _first_value(row: Dict[str, Any], candidates: List[str]) -> Any:
     return None
 
 
+def _fetch_tdx_spot_map() -> Dict[str, Dict[str, Any]]:
+    """使用 TdxProvider 获取全市场实时行情快照。
+
+    优先级：pytdx > DuckDB > AkShare
+    使用缓存减少重复请求，缓存有效期 3 分钟。
+    """
+    cached = _read_cache("tdx_spot_map_v1", ttl=180)
+    if isinstance(cached, dict) and cached:
+        return cached
+
+    try:
+        from src.utils.tdx_provider import TdxProvider
+        tdx = TdxProvider()
+
+        progress_log.push("正在连接 TDX 行情服务器...", "info")
+        progress_log.push("（首次连接可能需要 60~90 秒探测最优节点）", "info")
+
+        # 检查 TdxProvider 是否可用（使用招商银行作为测试股票）
+        # 这一步内部会触发服务器预热重测，可能耗时较长
+        ok, msg = tdx.check_connectivity("600036.SH")
+        if not ok:
+            logger.warning(f"TdxProvider 不可用: {msg}")
+            progress_log.push(f"TDX 连接失败: {msg}", "error")
+            return {}
+
+        progress_log.push("TDX 行情服务器连接成功", "success")
+
+        stock_manager.ensure_loaded()
+        stocks = stock_manager.stocks
+
+        out: Dict[str, Dict[str, Any]] = {}
+        # 限制获取数量，避免超时（最多获取 500 只股票作为示例）
+        # 实际使用时可以移除限制或改为分批获取
+        max_stocks = min(len(stocks), 5000)
+        progress_log.push(f"开始获取 {max_stocks} 只股票行情数据...", "info")
+
+        # 预收集 symbol 列表，用于批量获取 quotes（含昨收 last_close）
+        # 逐只 fetch_kline_data 无法拿到昨收，且该接口签名不接受 count 参数，
+        # 之前因此永远抛 TypeError，导致 change_pct 全部退化为 0。
+        symbol_list: list = []
+        code_by_symbol: Dict[str, str] = {}
+        for s in stocks[:max_stocks]:
+            code = _normalize_stock_code(s.get("code", ""))
+            if not code:
+                continue
+            try:
+                sym = tdx._normalize_symbol(code)
+                symbol_list.append(sym)
+                code_by_symbol[sym] = code
+            except Exception:
+                continue
+
+        # 批量拉 quotes（每批 80 只，避免单次请求过大）
+        quotes_by_sym: Dict[str, Dict[str, Any]] = {}
+        try:
+            q = tdx._ensure_quotes()
+            if q is not None:
+                batch_size = 80
+                for j in range(0, len(symbol_list), batch_size):
+                    batch = symbol_list[j:j + batch_size]
+                    try:
+                        df_q = q.quotes(batch)
+                        if df_q is None or df_q.empty:
+                            continue
+                        for _, r in df_q.iterrows():
+                            sym_raw = str(r.get("code", "")).strip()
+                            # 匹配回 code_by_symbol：兼容返回原始 6 位或带后缀形式
+                            matched_sym = None
+                            if sym_raw in code_by_symbol:
+                                matched_sym = sym_raw
+                            else:
+                                for sym_key in code_by_symbol:
+                                    if sym_key.endswith(sym_raw) or sym_key.startswith(sym_raw):
+                                        matched_sym = sym_key
+                                        break
+                            if matched_sym:
+                                quotes_by_sym[matched_sym] = r.to_dict()
+                    except Exception as e:
+                        logger.debug(f"TDX quotes 批次失败: {e}")
+        except Exception as e:
+            logger.debug(f"TDX quotes 批量初始化失败: {e}")
+
+        for i, s in enumerate(stocks[:max_stocks]):
+            code = _normalize_stock_code(s.get("code", ""))
+            if not code:
+                continue
+
+            try:
+                bar = tdx.get_latest_bar(code)
+                if not bar:
+                    continue
+
+                # 标准化字段
+                price = float(bar.get("close", 0) or 0)
+                open_val = float(bar.get("open", 0) or 0)
+                high_val = float(bar.get("high", 0) or 0)
+                low_val = float(bar.get("low", 0) or 0)
+                volume = float(bar.get("vol", 0) or 0)
+                amount = float(bar.get("amount", 0) or 0)
+
+                # 计算涨跌幅：优先使用 quotes 返回的 last_close（昨收价）
+                sym_key = tdx._normalize_symbol(code)
+                q_row = quotes_by_sym.get(sym_key, {}) if quotes_by_sym else {}
+                pre_close_raw = q_row.get("last_close") if q_row else None
+                try:
+                    pre_close = float(pre_close_raw) if pre_close_raw not in (None, "", 0) else 0.0
+                except Exception:
+                    pre_close = 0.0
+
+                change_pct = 0.0
+                if pre_close > 0:
+                    change_pct = round((price - pre_close) / pre_close * 100, 2)
+                else:
+                    # 兜底：用 bar 自身无法得到昨收，保持 0；DuckDB/AkShare 会在后续补齐
+                    pre_close = price
+
+                # 开高低涨幅
+                open_pct = round((open_val - pre_close) / pre_close * 100, 2) if pre_close > 0 else 0
+                high_pct = round((high_val - pre_close) / pre_close * 100, 2) if pre_close > 0 else 0
+                low_pct = round((low_val - pre_close) / pre_close * 100, 2) if pre_close > 0 else 0
+
+                out[code] = {
+                    "price": round(price, 2) if price > 0 else None,
+                    "change_pct": round(change_pct, 2),
+                    "open_pct": open_pct,
+                    "high_pct": high_pct,
+                    "low_pct": low_pct,
+                    "volume": int(volume) if volume > 0 else None,
+                    "amount": round(amount / 10000.0, 2) if amount > 0 else None,  # 转为万元
+                    "turnover": None,  # TdxProvider 不提供换手率
+                    "amplitude": round((high_val - low_val) / pre_close * 100, 2) if pre_close > 0 else 0,
+                    "total_mv": None,  # TdxProvider 不提供市值
+                    "float_mv": None,
+                    "_source": "pytdx",
+                }
+
+                # 每 100 只股票输出一次进度
+                if (i + 1) % 100 == 0:
+                    logger.info(f"TdxProvider 已获取 {i + 1}/{max_stocks} 只股票行情")
+                    progress_log.push(f"已获取 {i + 1}/{max_stocks} 只股票行情", "info")
+
+            except Exception as e:
+                logger.debug(f"TdxProvider 获取 {code} 失败: {e}")
+                continue
+
+        if out:
+            _write_cache("tdx_spot_map_v1", out)
+            logger.info(f"TdxProvider 成功获取 {len(out)} 只股票行情")
+            progress_log.push(f"TDX 行情获取完成，共 {len(out)} 只股票", "success")
+
+        return out
+    except Exception as e:
+        logger.warning(f"TdxProvider 获取全市场行情失败: {e}")
+        progress_log.push(f"TDX 行情获取失败: {e}", "error")
+        return {}
+
+
 def _fetch_akshare_spot_map() -> Dict[str, Dict[str, Any]]:
     """拉取 AkShare 全市场快照并标准化为 code->metrics 映射。"""
     # 使用独立缓存键，避免每次筛选都打网络请求。
@@ -86,6 +286,7 @@ def _fetch_akshare_spot_map() -> Dict[str, Dict[str, Any]]:
     if ak is None:
         return {}
     try:
+        progress_log.push("正在通过 AkShare 获取行情快照...", "info")
         # 采用一次全量快照，再按代码映射，减少逐票请求开销。
         df = ak.stock_zh_a_spot_em()
         if df is None or df.empty:
@@ -111,9 +312,9 @@ def _fetch_akshare_spot_map() -> Dict[str, Dict[str, Any]]:
             total_mv_raw = _to_float_or_none(_first_value(row, ["总市值", "total_mv"]))
             float_mv_raw = _to_float_or_none(_first_value(row, ["流通市值", "float_mv", "circ_mv"]))
 
-            # 行情金额口径统一：筛选器内部 amount 使用“万元”。
+            # 行情金额口径统一：筛选器内部 amount 使用"万元"。
             amount_wan = round(amount_raw / 10000.0, 2) if amount_raw is not None else None
-            # 市值统一：筛选器目录是“亿元”。
+            # 市值统一：筛选器目录是"亿元"。
             total_mv_yi = round(total_mv_raw / 100000000.0, 2) if total_mv_raw is not None else None
             float_mv_yi = round(float_mv_raw / 100000000.0, 2) if float_mv_raw is not None else None
             # 开高低涨幅优先使用昨收推导，缺失时返回 None。
@@ -190,7 +391,7 @@ def _normalize_stock_code(raw_code: Any) -> str:
     m_suffixed = re.match(r"^(\d{1,6})\.(SH|SZ|BJ|XSHG|XSHE|XBJ)$", text)
     if m_suffixed:
         return m_suffixed.group(1).zfill(6)
-    # 纯数字场景：补齐到6位，修复“1/2/6”这类被去零代码。
+    # 纯数字场景：补齐到6位，修复"1/2/6"这类被去零代码。
     if text.isdigit():
         return text.zfill(6)
     # 兜底：提取数字部分，最多取后6位，避免异常字符导致空值。
@@ -447,11 +648,16 @@ def get_catalog() -> Dict[str, List[Dict[str, Any]]]:
 # 核心筛选逻辑
 # ---------------------------------------------------------------------------
 def get_duckdb_conn():
-    """获取 DuckDB 连接（复用已有 provider）。"""
+    """获取 DuckDB 连接（复用已有 provider）。
+
+    注意：DuckDbProvider 暴露的是 `_connect(read_only=...)`，之前误用 `get_connection()`
+    导致这里永远返回 None，DuckDB 路径在筛选器里实际上是死的。
+    写路径请用 `screener_auto_refresh._get_conn()`。
+    """
     try:
         from src.utils.duckdb_provider import DuckDbProvider
         provider = DuckDbProvider()
-        return provider.get_connection()
+        return provider._connect(read_only=False)
     except Exception:
         return None
 
@@ -527,8 +733,31 @@ def _compute_technical_indicators(df: pd.DataFrame) -> Dict[str, float]:
 
 
 def fetch_latest_metrics() -> List[Dict[str, Any]]:
-    """获取所有标的最新行情指标，带文件缓存。"""
-    # 升级缓存key，确保旧缓存中的“去零代码”不会继续污染结果。
+    """获取所有标的最新行情指标，带文件缓存。
+
+    数据源优先级：
+      1) DuckDB `dat_screener_metrics`（后台自动刷新落库的当日快照）
+      2) 文件缓存 `latest_metrics_v2.json`（TTL 5 分钟）
+      3) pytdx > DuckDB dat_day > AkShare > 本地股票清单（完整重算链路）
+    """
+    trade_date = _get_latest_trading_date()
+
+    # 优先级 1：从 DuckDB 直读当日快照（后台 refresh_loop 已落库）
+    try:
+        from src.utils.screener_auto_refresh import (
+            _read_from_duckdb,
+            _db_has_date,
+            _in_trading_hours,
+        )
+        # 盘内：必须 5 分钟内的新数据；盘外：当日有数据即视为有效
+        if _in_trading_hours() or _db_has_date(trade_date):
+            rows = _read_from_duckdb(trade_date)
+            if rows and len(rows) > 1000:
+                return rows
+    except Exception as e:
+        logger.debug(f"fetch_latest_metrics: DuckDB 读取失败，回退到原链路: {e}")
+
+    # 优先级 2：文件缓存（兜底，避免后台任务未启动时每次都重算）
     cached = _read_cache("latest_metrics_v2")
     if cached is not None:
         return cached
@@ -536,8 +765,12 @@ def fetch_latest_metrics() -> List[Dict[str, Any]]:
     stock_manager.ensure_loaded()
     stocks = stock_manager.stocks
     conn = get_duckdb_conn()
-    # 先准备 AkShare 快照映射，作为 DuckDB 缺失字段兜底。
+    # 先准备 pytdx 快照映射（最高优先级）
+    tdx_spot_map = _fetch_tdx_spot_map()
+    # 再准备 AkShare 快照映射，作为 DuckDB 缺失字段兜底。
     ak_spot_map = _fetch_akshare_spot_map()
+    # 使用最近交易日作为默认 screener_time，而不是当前时间（避免周末显示今天）
+    latest_trading_date = trade_date
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     results = []
@@ -558,13 +791,29 @@ def fetch_latest_metrics() -> List[Dict[str, Any]]:
             elif db_code.startswith("8") or db_code.startswith("4"):
                 db_code = f"{db_code}.BJ"
 
-        row = {"code": code, "name": name, "exchange": exchange, "screener_time": now_str}
-        # 标记是否主板，供“主板限定”策略直接执行筛选。
+        row = {"code": code, "name": name, "exchange": exchange, "screener_time": f"{latest_trading_date} 15:00:00", "price_date": latest_trading_date}
+        # 标记是否主板，供"主板限定"策略直接执行筛选。
         row["is_main_board"] = _is_main_board_code(code)
-        # 记录数据来源主标签，便于前端展示“来源占比”。
+        # 记录数据来源主标签，便于前端展示"来源占比"。
         row["_source_main"] = "basic"
         duckdb_hit = False
+        pytdx_hit = False
 
+        # 优先级1：pytdx 实时行情（最高优先级）
+        tdx_row = tdx_spot_map.get(code, {})
+        if isinstance(tdx_row, dict) and tdx_row and tdx_row.get("price") is not None:
+            pytdx_hit = True
+            # 使用 pytdx 数据填充核心行情字段
+            for k in ["price", "change_pct", "open_pct", "high_pct", "low_pct", "volume", "amount", "amplitude"]:
+                if tdx_row.get(k) is not None:
+                    row[k] = tdx_row.get(k)
+            # 设置涨跌停标记
+            if row.get("change_pct") is not None:
+                cp = float(row.get("change_pct") or 0.0)
+                row["limit_up"] = abs(cp - 10.0) < 0.1 or abs(cp - 20.0) < 0.1
+                row["limit_down"] = abs(cp + 10.0) < 0.1 or abs(cp + 20.0) < 0.1
+
+        # 优先级2：DuckDB 历史数据（用于技术指标和时序条件）
         if conn:
             try:
                 df = conn.execute(
@@ -574,6 +823,20 @@ def fetch_latest_metrics() -> List[Dict[str, Any]]:
                 if df is not None and not df.empty and len(df) > 0:
                     duckdb_hit = True
                     latest = df.iloc[0]
+                    # 使用数据实际的交易日期作为 screener_time，而不是当前时间
+                    trade_date = latest.get("trade_date")
+                    if trade_date is not None:
+                        try:
+                            # 兼容多种日期格式：datetime/date/字符串
+                            if hasattr(trade_date, "strftime"):
+                                row["screener_time"] = trade_date.strftime("%Y-%m-%d") + " 15:00:00"  # 收盘时间
+                                row["price_date"] = trade_date.strftime("%Y-%m-%d")
+                            else:
+                                trade_date_str = str(trade_date)[:10]
+                                row["screener_time"] = trade_date_str + " 15:00:00"
+                                row["price_date"] = trade_date_str
+                        except Exception:
+                            row["screener_time"] = f"{latest_trading_date} 15:00:00"
                     close_val = float(latest.get("close", 0) or 0)
                     open_val = float(latest.get("open", 0) or 0)
                     high_val = float(latest.get("high", 0) or 0)
@@ -640,8 +903,12 @@ def fetch_latest_metrics() -> List[Dict[str, Any]]:
                 cp = float(row.get("change_pct") or 0.0)
                 row["limit_down"] = abs(cp + 10.0) < 0.1 or abs(cp + 20.0) < 0.1
 
-        # 统一标记主来源：duckdb / mixed / akshare / basic。
-        if duckdb_hit and ak_fill_count > 0:
+        # 统一标记主来源：pytdx / duckdb / mixed / akshare / basic。
+        if pytdx_hit and duckdb_hit:
+            row["_source_main"] = "pytdx"  # pytdx 优先，DuckDB 用于技术指标
+        elif pytdx_hit:
+            row["_source_main"] = "pytdx"
+        elif duckdb_hit and ak_fill_count > 0:
             row["_source_main"] = "mixed"
         elif duckdb_hit:
             row["_source_main"] = "duckdb"
@@ -663,24 +930,28 @@ def get_data_source_documentation() -> Dict[str, Any]:
         "title": "条件筛选数据说明",
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "source_priority": [
-            "1) DuckDB(日线dat_day)优先：提供历史可复现数据、技术指标、时序事件条件",
-            "2) AkShare实时快照兜底：补齐最新价/涨跌幅/成交量/成交额/换手率/市值等核心行情字段",
-            "3) 本地股票清单兜底：code/name 基础标的来自 data/stock_list.csv（无文件时尝试 AkShare 拉取）",
+            "1) pytdx(TdxProvider)实时行情优先：通过通达信接口获取最新价/涨跌幅/成交量等核心行情字段",
+            "2) DuckDB(日线dat_day)：提供历史可复现数据、技术指标、时序事件条件",
+            "3) AkShare实时快照兜底：当pytdx/DuckDB缺字段时，补齐换手率/市值等字段",
+            "4) 本地股票清单兜底：code/name 基础标的来自 data/stock_list.csv（无文件时尝试 AkShare 拉取）",
         ],
         "data_paths": [
             "本地股票列表: data/stock_list.csv",
             "筛选缓存目录: data/screener_cache/*.json",
             "DuckDB日线表: dat_day（路径由 data_provider.duckdb_path 配置）",
+            "pytdx实时行情缓存: data/screener_cache/tdx_spot_map_v1.json",
             "AkShare兜底快照缓存: data/screener_cache/akshare_spot_map_v1.json",
         ],
         "usage_logic": [
             "步骤1：先加载股票池(code/name/交易所)并标准化代码",
-            "步骤2：优先从DuckDB读取最新日线并计算涨跌幅、振幅、近N日涨幅、技术指标",
-            "步骤3：若DuckDB缺字段或不可用，自动使用AkShare快照补齐核心行情字段",
-            "步骤4：先执行简单条件，再按需执行时序条件（limit_up_5d、volume_shrink等）",
-            "步骤5：输出分页结果并写入5分钟缓存，减少重复查询开销",
+            "步骤2：优先从pytdx获取实时行情快照（最新价/涨跌幅/成交量等）",
+            "步骤3：从DuckDB读取历史日线，计算技术指标、近N日涨幅、时序事件条件",
+            "步骤4：若pytdx/DuckDB缺字段，自动使用AkShare快照补齐换手率/市值等字段",
+            "步骤5：先执行简单条件，再按需执行时序条件（limit_up_5d、volume_shrink等）",
+            "步骤6：输出分页结果并写入5分钟缓存，减少重复查询开销",
         ],
         "limitations": [
+            "pytdx 为逐只获取，全市场获取可能较慢（已加缓存机制）",
             "技术指标/复杂时序条件仍建议依赖DuckDB历史数据以保证复现一致性",
             "region/enterprise_type/margin_trading当前为占位字段，尚未接入稳定数据源",
         ],
@@ -708,6 +979,7 @@ def apply_filters(
         """统计来源占比，便于前端展示数据透明度。"""
         total_rows = len(rows)
         raw_counts = {
+            "pytdx": 0,
             "duckdb": 0,
             "akshare": 0,
             "mixed": 0,
@@ -730,7 +1002,7 @@ def apply_filters(
         filtered = [r for r in filtered if r.get("exchange") == exchange]
 
     # Phase 1: region/enterprise/margin 当前为占位字段。
-    # 两融数据尚未接入稳定来源时，必须忽略该筛选项，避免“误清空结果”。
+    # 两融数据尚未接入稳定来源时，必须忽略该筛选项，避免"误清空结果"。
     if margin_trading and margin_trading != "全部":
         # no-op: 仅记录占位语义，不参与实际过滤。
         pass
@@ -758,7 +1030,7 @@ def apply_filters(
     ts_conditions = [c for c in all_conditions if c.get("key") in time_series_keys or c.get("operator") in ("has_event", "formula")]
 
     # 条件去噪：当某字段当前全量为 None 时，像 "volume >= 0" 这类基线条件不应把结果误清空。
-    # 典型场景：上游字段暂未接入（全 None），AI 又给出“>=0”类宽松条件。
+    # 典型场景：上游字段暂未接入（全 None），AI 又给出">=0"类宽松条件。
     ignored_conditions: List[Dict[str, Any]] = []
 
     def _safe_float(v: Any) -> Optional[float]:
@@ -772,7 +1044,7 @@ def apply_filters(
         op = str(cond.get("operator", "")).strip().lower()
         val = _safe_float(cond.get("value"))
         val2 = _safe_float(cond.get("value2"))
-        # 仅对常见“非负指标”做兜底，避免误伤本应允许负值的字段。
+        # 仅对常见"非负指标"做兜底，避免误伤本应允许负值的字段。
         non_negative_keys = {
             "price", "volume", "amount", "turnover", "amplitude",
             "float_mv", "total_mv", "listing_days",
@@ -796,7 +1068,7 @@ def apply_filters(
         key = str(cond.get("key", "")).strip()
         if not key:
             continue
-        # 仅在“字段全缺失 + 条件本身是基线约束”时忽略。
+        # 仅在"字段全缺失 + 条件本身是基线约束"时忽略。
         has_any_value = any(r.get(key) is not None for r in filtered)
         if (not has_any_value) and _is_non_restrictive_baseline(cond):
             ignored_conditions.append(cond)
@@ -879,11 +1151,11 @@ def apply_filters(
         "data": page_data,
         # 返回被自动忽略的条件，便于前端排障与提示。
         "ignored_conditions": ignored_conditions,
-        # 同时返回“筛选前”和“筛选后”的来源占比，便于看板统计与可视化解释。
+        # 同时返回"筛选前"和"筛选后"的来源占比，便于看板统计与可视化解释。
         "source_stats": {
             "pool": _summarize_sources(metrics),
             "filtered": _summarize_sources(filtered),
-            # 新增“当前页”口径，方便前端分页场景展示更直观的来源占比。
+            # 新增"当前页"口径，方便前端分页场景展示更直观的来源占比。
             "filtered_page": _summarize_sources(page_data),
         },
     }
@@ -1021,8 +1293,8 @@ def _evaluate_time_series(
             except ValueError:
                 pass
 
-        # dat_day 按 trade_date DESC 查询：iloc[0] 为“今天”，iloc[1] 为“昨天”。
-        # 这里的业务语义是“最近一次涨停后的N日内，当前日缩量到阈值以下”：
+        # dat_day 按 trade_date DESC 查询：iloc[0] 为"今天"，iloc[1] 为"昨天"。
+        # 这里的业务语义是"最近一次涨停后的N日内，当前日缩量到阈值以下"：
         # - 在最近 lookback_days 天内寻找最近涨停日（不含今天）
         # - 判断今天成交量 < 涨停日成交量 * threshold
         current_volume = float(volume.iloc[0]) if len(volume) > 0 else 0.0

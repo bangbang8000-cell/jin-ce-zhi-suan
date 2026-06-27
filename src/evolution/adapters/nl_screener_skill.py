@@ -37,15 +37,22 @@ SYSTEM_PROMPT_V1 = """你是A股条件筛选执行器，请把用户自然语言
   "warnings": []
 }
 
+screen_conditions 每项字段：
+- key, tab, operator, label, value, value2, unit, enabled
+- confidence: 0~1 的浮点数，表示你对此条件准确反映用户意图的把握程度
+  - 0.8+：清晰明确（如"主板"、"市盈率小于20"）
+  - 0.5~0.8：有一定推测（如"低估值"→PE<30 是推测值）
+  - <0.5：高度推测（如"强势股"无明确数值定义）
+  - 无法映射到已知字段时，enabled=false 并写入 warnings
+
 规则约束：
 1) 只输出JSON，不要markdown，不要多余文本。
-2) screen_conditions 每项字段仅允许：
-   key, tab, operator, label, value, value2, unit, enabled
-3) operator 仅允许：gt,gte,lt,lte,between,toggle,has_event,formula
-4) 仅可使用系统已支持的key；不确定项写入warnings。
-5) 买卖时点、止盈止损、仓位控制写入execution_rules，不放入screen_conditions。
-6) 遵守A股约束：T+1、涨停不可买、跌停不可卖，写入execution_rules。
-7) 优先产出可执行条件（enabled=true），不可执行条件标记enabled=false。
+2) operator 仅允许：gt,gte,lt,lte,between,toggle,has_event,formula
+3) 仅可使用系统已支持的key；不确定项写入warnings。
+4) 买卖时点、止盈止损、仓位控制写入execution_rules，不放入screen_conditions。
+5) 遵守A股约束：T+1、涨停不可买、跌停不可卖，写入execution_rules。
+6) 优先产出可执行条件（enabled=true），不可执行条件标记enabled=false。
+7) 每个条件必须带 confidence，缺失时后端会填默认值 0.7。
 """
 
 # 统一允许的操作符集合，避免模型输出非常规值导致筛选行为不确定。
@@ -173,7 +180,7 @@ def _normalize_conditions(items: Any) -> List[Dict[str, Any]]:
         key = str(item.get("key", "")).strip()
         if not key:
             continue
-        # 条件字段别名修复：将“market/board=主板”归一化为 is_main_board 开关。
+        # 条件字段别名修复：将"market/board=主板"归一化为 is_main_board 开关。
         key_lower = key.lower()
         label_text = str(item.get("label", "")).strip()
         value_text = str(item.get("value", "")).strip()
@@ -204,9 +211,32 @@ def _normalize_conditions(items: Any) -> List[Dict[str, Any]]:
                 "value2": item.get("value2"),
                 "unit": str(item.get("unit", "")).strip(),
                 "enabled": _to_bool(item.get("enabled", True), default=True),
+                # confidence：LLM 对自身理解准确度的自评分，0~1。
+                # 缺失时兜底 0.7（中等偏上，避免低置信被误判为"完全不确定"）。
+                "confidence": _clamp_confidence(item.get("confidence")),
             }
         )
     return normalized
+
+
+def _clamp_confidence(value: Any) -> float:
+    """把 LLM 输出的 confidence 强制归一化到 [0, 1] 区间。
+
+    非法值（None / 字符串 / 越界数字）统一兜底为 0.7，避免前端分档逻辑崩溃。
+    """
+    if value is None:
+        return 0.7
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.7
+    if f != f:  # NaN
+        return 0.7
+    if f < 0:
+        return 0.0
+    if f > 1:
+        return 1.0
+    return round(f, 2)
 
 
 def _build_messages(user_prompt: str) -> List[Dict[str, str]]:
@@ -222,7 +252,7 @@ def run_nl_screener_skill(
     page: int = 1,
     page_size: int = 50,
     logic_mode: str = "AND",
-    scope: str = "strategy_manager",
+    scope: str = "screener",
     example_id: str = "",
 ) -> NlScreenerResult:
     """一步执行自然语言筛选：提示词 -> 条件解析 -> 筛选结果。"""
@@ -230,9 +260,11 @@ def run_nl_screener_skill(
     if not text:
         return NlScreenerResult(status="error", data={}, msg="用户提示词不能为空")
 
-    # 优先读取策略管理域配置；不可用时回退统一配置域。
+    # 条件筛选走专用 screener 域（默认非推理模型），缺失时回退到 strategy_manager 再 unified。
     cfg = ConfigLoader()
     client = build_unified_llm_client(cfg, scope=scope)
+    if not client.cfg.is_ready():
+        client = build_unified_llm_client(cfg, scope="strategy_manager")
     if not client.cfg.is_ready():
         client = build_unified_llm_client(cfg, scope="unified")
     if not client.cfg.is_ready():
@@ -244,7 +276,9 @@ def run_nl_screener_skill(
     llm_text = client.complete(
         messages=messages,
         temperature=0.1,
-        max_tokens=1800,
+        # 与 parse_strategy 同步：为 reasoning 阶段留出足够预算，避免长 JSON 被截断。
+        max_tokens=8192,
+        response_format={"type": "json_object"},
     ).get("content", "")
     parsed = _extract_json(llm_text)
     if parsed is None:
@@ -255,11 +289,14 @@ def run_nl_screener_skill(
         )
 
     screen_conditions = _normalize_conditions(parsed.get("screen_conditions", []))
-    execution_rules = (
-        parsed.get("execution_rules", [])
-        if isinstance(parsed.get("execution_rules", []), list)
-        else []
-    )
+    # execution_rules 可能是对象（包含 sort/top_n 等）或列表，两种格式都要支持
+    raw_execution_rules = parsed.get("execution_rules", [])
+    if isinstance(raw_execution_rules, dict):
+        execution_rules = raw_execution_rules
+    elif isinstance(raw_execution_rules, list):
+        execution_rules = raw_execution_rules
+    else:
+        execution_rules = []
     strategy_meta = (
         parsed.get("strategy_meta", {})
         if isinstance(parsed.get("strategy_meta", {}), dict)
@@ -269,7 +306,7 @@ def run_nl_screener_skill(
     # 示例ID后端兜底：前端未传 example_id 时按提示词语义推断。
     inferred_example_id = _infer_example_id_from_prompt(text)
     effective_input_example_id = str(example_id or "").strip() or inferred_example_id
-    # 对内置示例策略应用后端强制排序，避免依赖LLM理解“按xx排序”的语义。
+    # 对内置示例策略应用后端强制排序，避免依赖LLM理解"按xx排序"的语义。
     forced_sort = resolve_screener_demo_sort(user_prompt=text, example_id=effective_input_example_id)
     sort_by = str(forced_sort.get("sort_by", "")).strip() or None
     sort_order = str(forced_sort.get("sort_order", "desc")).strip().lower() or "desc"
@@ -284,10 +321,43 @@ def run_nl_screener_skill(
             sort_by = "change_pct"
             sort_order = "desc"
 
+    # 从 execution_rules 中提取 top_n，用于限制返回数量
+    top_n = None
+    if isinstance(execution_rules, dict):
+        raw_top_n = execution_rules.get("top_n")
+        if raw_top_n is not None:
+            try:
+                top_n = int(raw_top_n)
+                if top_n < 1 or top_n > 500:
+                    top_n = None
+            except (ValueError, TypeError):
+                top_n = None
+
+    # 如果 execution_rules 中没有 top_n，从用户提示词中提取数量限制
+    if top_n is None:
+        # 匹配常见模式："前20只"、"前30支"、"top 20"、"输出前20"等
+        top_n_patterns = [
+            r'前\s*(\d+)\s*[只支个条]',
+            r'top\s*(\d+)',
+            r'输出\s*前\s*(\d+)',
+            r'取\s*前\s*(\d+)',
+        ]
+        for pattern in top_n_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    extracted_n = int(match.group(1))
+                    if 1 <= extracted_n <= 500:
+                        top_n = extracted_n
+                        break
+                except (ValueError, TypeError):
+                    continue
+
     # 只执行 enabled=true 的条件，避免不可执行规则误入筛选器。
     executable = [cond for cond in screen_conditions if bool(cond.get("enabled", False))]
     # 示例强制条件：命中内置示例时，直接采用后端固定条件，不依赖LLM条件质量。
-    effective_example_id = matched_example_id or effective_input_example_id
+    # 优先使用用户显式传入的 example_id，避免被提示词匹配结果覆盖。
+    effective_example_id = effective_input_example_id or matched_example_id
     forced_conditions = _fallback_conditions_for_example(effective_example_id)
     if forced_conditions:
         executable = forced_conditions
@@ -298,7 +368,7 @@ def run_nl_screener_skill(
         if fallback_conditions:
             executable = fallback_conditions
             warnings.append("模型未产出可执行条件，已按示例模板回退到内置筛选条件。")
-    # 当没有任何可执行条件时返回空结果，避免退化成“默认股票池前N只”假筛选。
+    # 当没有任何可执行条件时返回空结果，避免退化成"默认股票池前N只"假筛选。
     if not executable:
         warnings.append("未解析到可执行筛选条件，已返回空结果，请补充更明确的筛选描述。")
         execution_plan = build_execution_plan(execution_rules=execution_rules, user_prompt=text)
@@ -343,6 +413,11 @@ def run_nl_screener_skill(
     technical_conditions = [cond for cond in executable if cond.get("tab") == "technical"]
     financial_conditions = [cond for cond in executable if cond.get("tab") == "financial"]
 
+    # 如果 LLM 返回了 top_n，用它来限制返回数量（覆盖前端传入的 page_size）
+    effective_page_size = page_size
+    if top_n is not None:
+        effective_page_size = top_n
+
     # 复用现有筛选执行器，返回分页结果供前端直接展示。
     filter_result = apply_filters(
         market_conditions=market_conditions,
@@ -350,10 +425,22 @@ def run_nl_screener_skill(
         financial_conditions=financial_conditions,
         logic_mode=str(logic_mode or "AND").upper(),
         page=max(1, int(page or 1)),
-        page_size=max(1, min(int(page_size or 50), 500)),
+        page_size=max(1, min(int(effective_page_size or 50), 500)),
         sort_by=sort_by,
         sort_order=sort_order,
     )
+
+    # 当用户通过 top_n 限制返回数量时，同步截断 total，避免前端显示"共3156条"误导用户。
+    # 场景：用户说"前30只"，total 应显示30，而不是满足条件的全部股票数。
+    if top_n is not None and isinstance(filter_result, dict):
+        original_total = int(filter_result.get("total") or 0)
+        capped_total = min(original_total, top_n)
+        filter_result["total"] = capped_total
+        # 同步 total_pages，避免翻页逻辑与截断后的 total 不一致。
+        original_total_pages = int(filter_result.get("total_pages") or 1)
+        if original_total > 0 and capped_total < original_total:
+            capped_pages = max(1, (capped_total + filter_result.get("page_size", top_n) - 1) // max(1, int(filter_result.get("page_size") or top_n)))
+            filter_result["total_pages"] = min(original_total_pages, capped_pages)
 
     # 将 execution_rules 归一化为可执行计划，便于回测/实盘层后续直接消费。
     execution_plan = build_execution_plan(execution_rules=execution_rules, user_prompt=text)

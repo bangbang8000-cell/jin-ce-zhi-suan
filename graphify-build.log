@@ -1,0 +1,17 @@
+[2026年06月27日 16:35:26] starting extract with deepseek backend...
+[graphify extract] scanning D:\04.量化\jin-ce-zhi-suan
+[graphify extract] found 123 code, 24 docs, 0 papers, 14 images
+[graphify extract] AST extraction on 123 code files...
+  AST extraction: 100/123 uncached files (81%) [20 workers]
+  AST extraction: 123/123 files (100%) [20 workers]
+[graphify extract] semantic extraction on 38 files via deepseek...
+[graphify extract] chunk 3/3 done
+[graphify extract] chunk 2/3 done
+[graphify extract] chunk 1/3 done
+[graphify] Deduplicated 2 node(s).
+[graphify] Extraction warning (1 issues): Edge 16635 has invalid confidence 'IMPLICIT' - must be one of ['AMBIGUOUS', 'EXTRACTED', 'INFERRED']
+[graphify extract] wrote D:\04.量化\jin-ce-zhi-suan\graphify-out\graph.json: 4964 nodes, 15159 edges, 152 communities
+[graphify extract] wrote D:\04.量化\jin-ce-zhi-suan\graphify-out\.graphify_analysis.json
+[graphify extract] tokens: 114,480 in / 45,262 out, est. cost (~deepseek): $0.0287
+[graphify extract] next: run `graphify cluster-only D:\04.量化\jin-ce-zhi-suan` to generate GRAPH_REPORT.md and name communities
+[2026年06月27日 16:38:39] done. exit=\0

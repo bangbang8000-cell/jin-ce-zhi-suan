@@ -1,0 +1,199 @@
+INFO:     Started server process [33624]
+INFO:     Waiting for application startup.
+2026-06-25 22:47:02,259 - CabinetServer - INFO - Initializing Cabinet Server...
+2026-06-25 22:47:02,260 - CabinetServer - INFO - [startup] >>> load_report_history started
+[startup] >>> load_report_history started
+2026-06-25 22:47:02,507 - CabinetServer - INFO - [startup] load_report_history done in 0.25s
+[startup] load_report_history done in 0.25s
+2026-06-25 22:47:02,508 - CabinetServer - INFO - [startup] >>> pattern_thumb_warmup_task started
+[startup] >>> pattern_thumb_warmup_task started
+2026-06-25 22:47:02,508 - CabinetServer - WARNING - [startup] pattern_thumb_warmup_task disabled due to segmentation fault in mplfinance
+2026-06-25 22:47:02,508 - CabinetServer - INFO - [startup] _ensure_pattern_thumb_warmup_task done in 0.00s
+[startup] _ensure_pattern_thumb_warmup_task done in 0.00s
+2026-06-25 22:47:02,508 - CabinetServer - INFO - --- Registered API Endpoints ---
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'HEAD', 'GET'} /openapi.json
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'HEAD', 'GET'} /docs
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'HEAD', 'GET'} /docs/oauth2-redirect
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'HEAD', 'GET'} /redoc
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /report
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /logo.png
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /favicon.ico
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/frontend/cache_asset
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/search
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/strategies
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/strategy_manager/list
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/strategy_manager/detail
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/strategy_manager/prompt_from_strategy
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/strategy_manager/toggle
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/strategy_manager/analyze
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/strategy_manager/analyze_market
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/strategy_manager/next_id
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/generate_formula
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/compile
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/validate_formula
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/import_strategy
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/import_pack
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/pipeline/run
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/tdx/capabilities
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/tdx/terminal/status
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/terminal/connect
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/terminal/disconnect
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/terminal/subscribe
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/tdx/terminal/quotes
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/terminal/place_order
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/tdx/terminal/orders
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/terminal/broker/login
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/tdx/terminal/broker/balance
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/tdx/terminal/broker/positions
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/tdx/terminal/broker/cancel_order
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/blk/parse
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/blk/import_stock_pool
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/screener/filter_options
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/screener/catalog
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/screener/data_sources
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/screener/prompt_templates
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/screener/filter
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/screener/export
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/screener/parse_strategy
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/screener/ai_filter
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/screener/history/list
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/screener/strategy/create_from_ai
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/screener/batch_backtest/start
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/batch/generate_tasks
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/batch/strategy_pool/sync
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/batch/combination/recommend
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/batch/run/start
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/batch/run/status
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'POST'} /api/batch/run/stop
+2026-06-25 22:47:02,508 - CabinetServer - INFO - {'GET'} /api/batch/overview
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/batch/tasks_csv/list
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/batch/tasks_csv/create_template
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/batch/tasks_preview
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/strategy_manager/add
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/strategy_manager/update
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/strategy_manager/delete
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/strategy_manager/screener_examples
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/config
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/config/test_data_source_connectivity
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/config/save
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/config/test_tushare_connectivity
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/config/test_tdx_connectivity
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/llm/ping
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/llm/status
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/fundamental/catalog
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/fundamental/profile
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/fundamental/cache_list
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/fundamental/cache_file
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/report/latest
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/report/history
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/report/{report_id}
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/consistency/snapshots
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/consistency/snapshots/{snapshot_id}
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/consistency/replay_runs
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/consistency/replay_runs/{run_id}
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/consistency/replay_runs
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/consistency/compare
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/consistency/reports
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/consistency/reports/{report_id}
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/report/{report_id}/ai_review
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/report/{report_id}/ai_review_buffett
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/report/strategy/kline_data
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/report/delete
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/backtest/kline_data
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/backtest/kline_chart
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/backtest/kline_thumb
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/backtest/kline_thumb_status
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/control/start_backtest
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/control/start_live
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/control/stop
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/control/switch_strategy
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/control/set_source
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/control/reload_strategies
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/status
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/status/light
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/onboarding/health_check
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/onboarding/network_diag
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/evolution/start
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/evolution/profile/update
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/evolution/profile/updates
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/evolution/stop
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/evolution/status
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/evolution/concurrency
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/evolution/history
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/evolution/top
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/evolution/runs
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/evolution/runs
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'PUT'} /api/evolution/runs/{run_id}
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'DELETE'} /api/evolution/runs/{run_id}
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/evolution/family_stats
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/evolution/family
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'PUT'} /api/evolution/family/{family}
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'DELETE'} /api/evolution/family/{family}
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/evolution/platform/overview
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/live/fund_pool
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'GET'} /api/live/fund_pool/statement
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/live/fund_pool/reset
+2026-06-25 22:47:02,509 - CabinetServer - INFO - {'POST'} /api/live/fund_pool/adjust
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'GET'} /api/webhook/failed
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'POST'} /api/webhook/failed/retry
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'POST'} /api/webhook/failed/delete
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'POST'} /api/webhook/daily_summary/repush
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'POST'} /api/webhook/test
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'GET'} /api/webhook/audit/latest
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'POST'} /api/history_sync/run
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'POST'} /api/history_sync/stock_list/refresh
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'GET'} /api/history_sync/status
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'POST'} /api/history_sync/stop
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'GET'} /api/history_sync/records
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'GET'} /api/history_sync/records/{run_id}
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'POST'} /api/history_sync/scheduler/start
+2026-06-25 22:47:02,510 - CabinetServer - INFO - {'POST'} /api/history_sync/scheduler/stop
+2026-06-25 22:47:02,510 - CabinetServer - INFO - --------------------------------
+2026-06-25 22:47:02,510 - CabinetServer - INFO - [startup] >>> create_strategies started
+[startup] >>> create_strategies started
+2026-06-25 22:47:02,629 - StrategyManagerRepo - WARNING - patched_macd_unpack strategy_id=43 changed_lines=1
+2026-06-25 22:47:02,636 - CabinetServer - INFO - [startup] create_strategies done in 0.13s
+[startup] create_strategies done in 0.13s
+2026-06-25 22:47:02,637 - CabinetServer - INFO - Loaded 69 Strategies: ['长期持有一次买入', '三周期共振波段', '短线弱转强烂板', 'ETF行业轮动', '龙头首阴反包', '3N法则主升浪', '海豚交易法', '跳空交易系统', '神奇九转', '箱体降本策略', '选股示例-主板强势回撤', '经典-单边大牛市（主升浪）', '经典-单边大熊市（主跌浪）', '经典-妖股连板脉冲', '经典-矩形箱体震荡', '经典-对称三角形整理', '经典-上升旗形（上涨中继）', '经典-高位横盘强势整理', '经典-下降楔形（诱空见底）', '经典-W 底 / 双底反转', '经典-V 型反转（熊转牛）', 'TrendHold-Pro 趋势锁仓策略（增强合规版）-日线', 'TrendHold-300912 日线延续版 22A', '高抛低吸·股数增长策略', '月最大化收益策略', '新-高抛低吸·股数增长策略', '多周期序列驱动策略-系统生成', '多周期序列驱动策略-GPT', '多周期序列驱动策略-系统生成-5mins', '多周期序列驱动策略-GPT-5mins-改造', '多周期序列驱动策略-GPT-5mins', '6K序列趋势策略-豆包v2', '智能策略6389', '智能策略7295', 'OliverKellEMA交易法则', 'OliverKellEMA交易法则-改进A', 'OliverKellEMA交易法则-改进34A2', 'OliverKellEMA交易法则-改进34A3', 'OliverKellEMA交易法则-改进34A4', 'OliverKellEMA交易法则-改进34A5', 'OliverKellEMA交易法则-改进34A6', 'OliverKellEMA交易法则-改进A7', 'OliverKellEMA策略路由R1', 'OliverKellEMA-5mins', 'OliverKellEMA-1mins', 'OliverKellEMA-15mins', 'OliverKellEMA-30mins', 'OliverKellEMA-60mins', 'OliverKellEMA-day', 'OliverKellEMA-利用率增强R1U', 'OliverKellEMA-激进R1U500', 'OliverKellEMA-超激进R1U500V2', 'OliverKellEMA-冲顶R1U500V3', 'OliverKellEMA-均衡冲顶R1U500V3.1', 'OliverKellEMA-稳健冲顶R1U500V3.1b', '长期持有一次买入-EVOL-v1', '三周期共振波段-EVOL-v1', '3N法则主升浪-EVOL-v1', '智能策略8453', '三周期共振波段-EVOL-v2', '短线弱转强烂板-EVOL-v1', '3N法则主升浪-EVOL-v2', '3N法则主升浪-EVOL-v2-EVOL-v1', '3N法则主升浪-EVOL-v2-EVOL-v2', '3N法则主升浪-EVOL-v2-EVOL-v3', '参考基本面', 'OliverKellEMA-稳健冲顶R1U500V3.1b-EVOL-v1', 'OliverKellEMA-冲顶R1U500V3-EVOL-v1', '智能策略9996']
+[startup] loaded strategies: 69
+2026-06-25 22:47:02,637 - CabinetServer - INFO - [startup] >>> config_reload_and_private_check started
+[startup] >>> config_reload_and_private_check started
+2026-06-25 22:47:02,638 - CabinetServer - INFO - [startup] _startup_private_data_check done in 0.00s
+[startup] _startup_private_data_check done in 0.00s
+2026-06-25 22:47:02,638 - CabinetServer - INFO - [startup] >>> evolution_setup started
+[startup] >>> evolution_setup started
+2026-06-25 22:47:02,638 - CabinetServer - INFO - [startup] screener demo probe warmup disabled
+2026-06-25 22:47:02,638 - CabinetServer - INFO - [startup] evolution setup done in 0.00s
+[startup] evolution setup done in 0.00s
+2026-06-25 22:47:02,638 - CabinetServer - INFO - [startup] >>> server_bind_announce started
+[startup] >>> server_bind_announce started
+2026-06-25 22:47:02,638 - CabinetServer - INFO - Server Started. Access dashboard at http://localhost:8000
+2026-06-25 22:47:02,638 - CabinetServer - INFO - [startup] all stages done in 0.38s
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+[startup] all stages done in 0.38s
+2026-06-25 22:47:12,557 - CabinetServer - INFO - Incoming Request: GET /api/screener/filter_options
+[OK] Loaded 5205 stocks from local cache.
+2026-06-25 22:47:12,576 - CabinetServer - INFO - Response Status: 200
+INFO:     127.0.0.1:6610 - "GET /api/screener/filter_options HTTP/1.1" 200 OK
+2026-06-25 22:47:22,671 - CabinetServer - INFO - Incoming Request: GET /api/screener/catalog
+2026-06-25 22:47:22,672 - CabinetServer - INFO - Response Status: 200
+INFO:     127.0.0.1:6660 - "GET /api/screener/catalog HTTP/1.1" 200 OK
+2026-06-25 22:47:29,502 - CabinetServer - INFO - Incoming Request: GET /api/screener/catalog
+2026-06-25 22:47:29,504 - CabinetServer - INFO - Response Status: 200
+INFO:     127.0.0.1:6703 - "GET /api/screener/catalog HTTP/1.1" 200 OK
+2026-06-25 22:47:42,893 - CabinetServer - INFO - Incoming Request: POST /api/screener/filter
+2026-06-25 22:52:17,429 - CabinetServer - INFO - Response Status: 200
+2026-06-25 22:52:19,807 - CabinetServer - INFO - Incoming Request: GET /api/health
+2026-06-25 22:52:19,808 - CabinetServer - INFO - Response Status: 404
+INFO:     127.0.0.1:16916 - "GET /api/health HTTP/1.1" 404 Not Found
+2026-06-25 22:52:26,507 - CabinetServer - INFO - Incoming Request: GET /api/screener/catalog
+2026-06-25 22:52:26,508 - CabinetServer - INFO - Response Status: 200
+INFO:     127.0.0.1:16947 - "GET /api/screener/catalog HTTP/1.1" 200 OK
+INFO:     ('127.0.0.1', 1198) - "WebSocket /ws" [accepted]
+INFO:     connection open
+2026-06-26 10:18:25,183 - CabinetServer - INFO - Incoming Request: GET /api/strategy_manager/list
+2026-06-26 10:18:25,200 - CabinetServer - INFO - Response Status: 200
+INFO:     127.0.0.1:51116 - "GET /api/strategy_manager/list?page=1&page_size=20 HTTP/1.1" 200 OK
+INFO:     connection closed

@@ -163,7 +163,7 @@ def list_builtin_strategy_meta():
     global _BUILTIN_META_CACHE
     if isinstance(_BUILTIN_META_CACHE, list) and _BUILTIN_META_CACHE:
         return [dict(x) for x in _BUILTIN_META_CACHE]
-    # 仅在“当前能筛出股票”时才内置示例策略10，避免无效示例误导用户。
+    # 仅在"当前能筛出股票"时才内置示例策略10，避免无效示例误导用户。
     include_screener_demo = is_builtin_screener_demo_available()
     items = [
         Strategy00(), Strategy01(), Strategy02(), Strategy03(), Strategy04(),
@@ -192,28 +192,35 @@ def list_builtin_strategy_meta():
 
 
 def is_builtin_screener_demo_available():
-    """检查内置选股示例策略是否具备“可筛出股票”的基础条件。"""
+    """检查内置选股示例策略是否具备'可筛出股票'的基础条件。
+
+    优化：避免在启动时触发耗时的数据获取（如 Tushare API 调用）。
+    如果缓存存在，使用缓存数据探测；如果缓存不存在，直接返回 False，
+    避免阻塞服务器启动过程。
+    """
     global _BUILTIN_SCREENER_DEMO_AVAILABLE_CACHE
     if _BUILTIN_SCREENER_DEMO_AVAILABLE_CACHE is not None:
         return bool(_BUILTIN_SCREENER_DEMO_AVAILABLE_CACHE)
     try:
-        # 使用“主板开关”做高稳定性探测，确保内置示例策略可稳定筛出股票。
-        from src.utils.screener_data_provider import apply_filters
-        probe_result = apply_filters(
-            market_conditions=[
-                {"key": "is_main_board", "operator": "toggle", "value": True},
-            ],
-            technical_conditions=[],
-            financial_conditions=[],
-            logic_mode="AND",
-            page=1,
-            page_size=1,
-        )
-        total = int((probe_result or {}).get("total", 0) or 0)
+        # 先检查缓存是否存在，避免在启动时触发耗时的数据获取
+        import os
+        from src.utils.screener_data_provider import CACHE_DIR
+        cache_file = os.path.join(CACHE_DIR, "latest_metrics_v2.json")
+
+        if not os.path.exists(cache_file):
+            # 缓存不存在，跳过探测，避免阻塞启动
+            _BUILTIN_SCREENER_DEMO_AVAILABLE_CACHE = False
+            return False
+
+        # 轻量探测：只读缓存检查条目数，不跑完整 apply_filters
+        import json
+        with open(cache_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        total = len(data) if isinstance(data, list) else 0
         _BUILTIN_SCREENER_DEMO_AVAILABLE_CACHE = total > 0
         return bool(_BUILTIN_SCREENER_DEMO_AVAILABLE_CACHE)
     except Exception:
-        # 兜底策略：探测失败时按“不可筛出”处理，避免内置无效示例。
+        # 兜底策略：探测失败时按"不可筛出"处理，避免内置无效示例。
         _BUILTIN_SCREENER_DEMO_AVAILABLE_CACHE = False
         return False
 
@@ -487,13 +494,13 @@ def list_all_strategy_meta():
         sid = str(b["id"])
         if sid in deleted:
             continue
-        # 内置ID=10 固定作为“选股策略示例”分类，其余仍归入“内置策略”。
+        # 内置ID=10 固定作为"选股策略示例"分类，其余仍归入"内置策略"。
         builtin_category = "选股策略示例" if sid == "10" else "内置策略"
         out.append({
             "id": sid,
             "name": str(b["name"]),
             "builtin": True,
-            # 策略分类字段：供前端“按类别筛选”使用。
+            # 策略分类字段：供前端"按类别筛选"使用。
             "strategy_category": builtin_category,
             "kline_type": str(b.get("kline_type", "1min")),
             "enabled": sid not in disabled,
@@ -524,7 +531,7 @@ def list_all_strategy_meta():
         if source not in {"human", "market"}:
             source = "human"
         source_label = "用户输入" if source == "human" else "行情驱动"
-        # 约定：raw_requirement_title 为“选股策略示例”时归入示例分类。
+        # 约定：raw_requirement_title 为"选股策略示例"时归入示例分类。
         raw_title_for_category = str(c.get("raw_requirement_title", "")).strip()
         if raw_title_for_category == "选股策略示例":
             strategy_category = "选股策略示例"

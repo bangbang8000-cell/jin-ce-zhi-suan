@@ -23,6 +23,7 @@ import socket
 import ssl
 from contextlib import asynccontextmanager
 from collections import deque
+from sse_starlette.sse import EventSourceResponse
 from src.utils.dependency_bootstrap import ensure_project_dependencies
 
 # 在导入第三方库前先完成依赖自检，避免首启缺包直接崩溃。
@@ -330,6 +331,7 @@ history_sync_scheduler_next_run_ts = 0.0
 live_auto_start_scheduler_task = None
 live_auto_start_last_trigger_date = ""
 live_auto_start_last_invalid_time = ""
+screener_auto_refresh_task = None
 startup_server_host = None
 startup_server_port = None
 webhook_notifier = WebhookNotifier()
@@ -3940,6 +3942,12 @@ class ScreenerFilterRequest(BaseModel):
     sort_by: Optional[str] = None
     sort_order: Optional[str] = "desc"
 
+class ScreenerStockAnalyzeRequest(BaseModel):
+    """AI股票深度分析请求体。"""
+    code: str
+    name: Optional[str] = ""
+    filter_conditions: Optional[Dict[str, Any]] = None
+
 class BlkImportStockPoolRequest(BaseModel):
     file_path: Optional[str] = None
     content: Optional[str] = None
@@ -5360,7 +5368,10 @@ async def api_screener_prompt_templates():
 @app.post("/api/screener/filter")
 async def api_screener_filter(req: ScreenerFilterRequest):
     try:
-        result = apply_filters(
+        # apply_filters 内部有 pytdx/AkShare 网络 IO 和 DuckDB 查询，
+        # 同步执行会阻塞事件循环导致其他 API 全部排队。
+        result = await asyncio.to_thread(
+            apply_filters,
             exchange=req.exchange,
             region=req.region,
             enterprise_type=req.enterprise_type,
@@ -5465,7 +5476,8 @@ class ScreenerCreateStrategyRequest(BaseModel):
 async def api_screener_parse_strategy(req: ScreenerParseRequest):
     """接收自然语言策略描述，调用大模型解析为结构化筛选条件 + 执行规则。"""
     try:
-        result = parse_strategy_to_conditions(req.description)
+        # LLM 调用是阻塞 IO，放到线程池避免卡死事件循环。
+        result = await asyncio.to_thread(parse_strategy_to_conditions, req.description)
         # 记录AI解析交互历史，便于页面追踪用户每次对话与产出。
         try:
             payload = {
@@ -5490,7 +5502,10 @@ async def api_screener_parse_strategy(req: ScreenerParseRequest):
 async def api_screener_ai_filter(req: ScreenerAiFilterRequest):
     """一步执行 AI 条件筛选：提示词解析 + 条件筛选 + 结果返回。"""
     try:
-        result = run_nl_screener_skill(
+        # run_nl_screener_skill 内部有 LLM 调用 + apply_filters（含网络 IO），
+        # 必须放到线程池执行，否则会阻塞事件循环。
+        result = await asyncio.to_thread(
+            run_nl_screener_skill,
             user_prompt=req.prompt,
             page=req.page or 1,
             page_size=req.page_size or 50,
@@ -5558,6 +5573,75 @@ async def api_screener_ai_filter(req: ScreenerAiFilterRequest):
         return {"status": "error", "msg": str(e)}
 
 
+@app.get("/api/screener/progress/stream")
+async def api_screener_progress_stream(request: Request):
+    """SSE 端点：实时推送 AI 筛选进度日志。
+
+    前端通过 EventSource 连接，按 offset 拉取增量日志。
+    """
+    from src.utils.screener_progress import progress_log
+
+    async def event_generator():
+        offset = 0
+        try:
+            while True:
+                # 读取增量日志
+                new_offset, entries = progress_log.read_since(offset)
+                if entries:
+                    # 推送给前端
+                    yield {
+                        "event": "progress",
+                        "data": json.dumps({"offset": new_offset, "entries": entries}),
+                    }
+                    offset = new_offset
+                # 短暂休眠，避免空转
+                await asyncio.sleep(0.3)
+        except asyncio.CancelledError:
+            # 客户端断开连接时正常退出
+            pass
+        except Exception as e:
+            logger.debug(f"SSE progress stream error: {e}")
+
+    return EventSourceResponse(event_generator())
+
+
+@app.post("/api/screener/progress/clear")
+async def api_screener_progress_clear():
+    """清空进度日志缓冲（可选，用于重置状态）。"""
+    try:
+        from src.utils.screener_progress import progress_log
+        progress_log.clear()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"/api/screener/progress/clear failed: {e}", exc_info=True)
+        return {"status": "error", "msg": str(e)}
+
+
+@app.get("/api/screener/auto_refresh/status")
+async def api_screener_auto_refresh_status():
+    """返回条件筛选后台自动刷新的运行状态，供前端常驻小条展示。"""
+    try:
+        from src.utils.screener_auto_refresh import get_status, refresh_once
+        return {"status": "success", **get_status()}
+    except Exception as e:
+        logger.error(f"/api/screener/auto_refresh/status failed: {e}", exc_info=True)
+        return {"status": "error", "msg": str(e)}
+
+
+@app.post("/api/screener/auto_refresh/trigger")
+async def api_screener_auto_refresh_trigger():
+    """手动触发一次后台刷新（如果当前未在跑）。"""
+    try:
+        from src.utils.screener_auto_refresh import refresh_once, state
+        if state.running:
+            return {"status": "busy", "msg": "已有刷新任务在运行"}
+        ok = refresh_once(force=True)
+        return {"status": "success" if ok else "failed"}
+    except Exception as e:
+        logger.error(f"/api/screener/auto_refresh/trigger failed: {e}", exc_info=True)
+        return {"status": "error", "msg": str(e)}
+
+
 @app.post("/api/screener/history/list")
 async def api_screener_history_list(req: ScreenerHistoryListRequest):
     """返回AI解析/筛选历史记录，供前端列表展示。"""
@@ -5570,6 +5654,196 @@ async def api_screener_history_list(req: ScreenerHistoryListRequest):
         return {"status": "success", **payload}
     except Exception as e:
         logger.error(f"/api/screener/history/list failed: {e}", exc_info=True)
+        return {"status": "error", "msg": str(e)}
+
+
+@app.post("/api/screener/ai_analyze_stock")
+async def api_screener_ai_analyze_stock(req: ScreenerStockAnalyzeRequest):
+    """AI深度分析单只股票：获取股票信息 + 大模型分析为什么被选中。"""
+    try:
+        from src.utils.screener_data_provider import fetch_latest_metrics
+        from src.strategy_intent.screener_parser import parse_strategy_to_conditions
+        # 获取股票基本信息
+        metrics = await asyncio.to_thread(fetch_latest_metrics)
+        stock_data = None
+        for m in metrics:
+            code = str(m.get("code", "")).strip().upper()
+            if code == req.code.upper():
+                stock_data = m
+                break
+        if not stock_data:
+            return {"status": "error", "msg": f"未找到股票 {req.code} 的数据"}
+        # 构建入选理由
+        matched_reasons = []
+        filter_conds = req.filter_conditions or {}
+        all_conditions = []
+        for key in ["market_conditions", "technical_conditions", "financial_conditions"]:
+            all_conditions.extend(filter_conds.get(key, []))
+        for cond in all_conditions:
+            key = cond.get("key", "")
+            label = cond.get("label", key)
+            op = cond.get("operator", "")
+            val = cond.get("value")
+            actual = stock_data.get(key)
+            if actual is not None:
+                if op == "gte" and val is not None and float(actual) >= float(val):
+                    matched_reasons.append(f"{label} ≥ {val}，当前值 {actual}")
+                elif op == "lte" and val is not None and float(actual) <= float(val):
+                    matched_reasons.append(f"{label} ≤ {val}，当前值 {actual}")
+                elif op == "between" and val is not None:
+                    val2 = cond.get("value2")
+                    if val2 is not None and float(val) <= float(actual) <= float(val2):
+                        matched_reasons.append(f"{label} 在 {val}~{val2} 之间，当前值 {actual}")
+                elif op == "toggle" and val:
+                    if actual:
+                        matched_reasons.append(f"{label} 符合条件")
+        # 调用大模型进行深度分析
+        ai_analysis = ""
+        risk_warnings = []
+        llm_error_msg = ""
+        try:
+            from src.evolution.adapters.llm_gateway_adapter import build_unified_llm_client
+            from src.utils.config_loader import ConfigLoader
+            cfg = ConfigLoader()
+            client = build_unified_llm_client(cfg, scope="screener")
+
+            # 检查 LLM 配置是否就绪
+            if not client.cfg.is_ready():
+                llm_error_msg = "⚠️ **条件筛选模型未配置或配置不完整**\n\n"
+                llm_error_msg += "**当前配置状态：**\n"
+                llm_error_msg += f"- 服务类型：{client.cfg.provider or '未配置'}\n"
+                llm_error_msg += f"- 服务地址：{client.cfg.base_url or '未配置'}\n"
+                llm_error_msg += f"- 模型名称：{client.cfg.model or '未配置'}\n\n"
+                llm_error_msg += "**请按以下步骤修复：**\n"
+                llm_error_msg += "1. 打开配置中心（点击右上角'配置'按钮）\n"
+                llm_error_msg += "2. 找到'条件筛选模型'部分\n"
+                llm_error_msg += "3. 填写以下配置：\n"
+                llm_error_msg += "   - 服务类型：选择 'OpenAI兼容' 或其他支持的类型\n"
+                llm_error_msg += "   - 服务地址：填写完整的 API 地址（如 `https://api.deepseek.com/v1`）\n"
+                llm_error_msg += "   - 服务密钥：填写 API Key（如果使用密钥认证）\n"
+                llm_error_msg += "   - 模型名称：填写模型名称（如 `deepseek-chat`）\n"
+                llm_error_msg += "4. 点击'测试条件筛选模型'按钮验证连通性\n"
+                llm_error_msg += "5. 保存配置后重试"
+            else:
+                # 构建分析提示词
+                stock_info_text = f"""
+股票：{req.code} {req.name}
+最新价：{stock_data.get('price', '--')} 元
+涨跌幅：{stock_data.get('change_pct', '--')}%
+成交额：{stock_data.get('amount', '--')} 万元
+换手率：{stock_data.get('turnover', '--')}%
+流通市值：{stock_data.get('float_mv', '--')} 亿元
+总市值：{stock_data.get('total_mv', '--')} 亿元
+"""
+                conditions_text = "\n".join([f"- {r}" for r in matched_reasons]) if matched_reasons else "无具体筛选条件"
+                prompt = f"""你是一个专业的股票分析师。请分析以下股票为什么被筛选选中，并给出深度分析和风险提示。
+
+【股票信息】
+{stock_info_text}
+
+【入选理由（基于筛选条件）】
+{conditions_text}
+
+请输出：
+1. 深度分析（300字以内）：分析这只股票的特点、为什么符合筛选条件、当前的市场位置和趋势
+2. 风险提示（3-5条）：这只股票可能存在的风险因素
+
+请用 JSON 格式输出，包含 analysis 和 risks 两个字段：
+{{"analysis": "深度分析内容", "risks": ["风险1", "风险2", ...]}}
+
+只输出 JSON，不要其他内容。"""
+                messages = [
+                    {"role": "system", "content": "你是专业的股票分析师，输出格式为 JSON。"},
+                    {"role": "user", "content": prompt},
+                ]
+                result = await asyncio.to_thread(
+                    client.complete,
+                    messages,
+                    temperature=0.3,
+                    max_tokens=2000,
+                )
+                content = result.get("content", "")
+                # 解析 JSON
+                import re
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    parsed = json.loads(json_match.group())
+                    ai_analysis = parsed.get("analysis", "")
+                    risk_warnings = parsed.get("risks", [])
+        except Exception as llm_err:
+            logger.warning("AI分析调用失败: %s", llm_err)
+            error_str = str(llm_err)
+
+            # 根据错误类型提供针对性的引导
+            if "WinError 10061" in error_str or " Connection refused" in error_str or "拒绝" in error_str:
+                llm_error_msg = "⚠️ **无法连接到条件筛选模型服务**\n\n"
+                llm_error_msg += "**错误原因：** 服务地址不可达或被拒绝\n\n"
+                llm_error_msg += "**当前配置：**\n"
+                llm_error_msg += f"- 服务地址：{client.cfg.base_url or '未配置'}\n\n"
+                llm_error_msg += "**请按以下步骤修复：**\n"
+                llm_error_msg += "1. 检查服务地址是否正确（OpenAI兼容API通常需要 `/v1` 后缀）\n"
+                llm_error_msg += "   - DeepSeek: `https://api.deepseek.com/v1`\n"
+                llm_error_msg += "   - 智谱AI: `https://open.bigmodel.cn/api/paas/v4`\n"
+                llm_error_msg += "   - Ollama本地: `http://localhost:11434/v1`\n"
+                llm_error_msg += "2. 确认服务是否正常运行\n"
+                llm_error_msg += "3. 检查网络连接和防火墙设置\n"
+                llm_error_msg += "4. 在配置中心点击'测试条件筛选模型'按钮验证\n"
+            elif "timeout" in error_str.lower() or "超时" in error_str:
+                llm_error_msg = "⚠️ **条件筛选模型响应超时**\n\n"
+                llm_error_msg += "**错误原因：** 模型服务响应时间过长\n\n"
+                llm_error_msg += "**建议操作：**\n"
+                llm_error_msg += "1. 稍后重试\n"
+                llm_error_msg += "2. 在配置中心增加'条件筛选超时秒数'（建议 60-120 秒）\n"
+                llm_error_msg += "3. 检查网络连接是否稳定\n"
+                llm_error_msg += "4. 考虑切换到更快的模型服务\n"
+            elif "401" in error_str or "403" in error_str or "Unauthorized" in error_str or "认证" in error_str:
+                llm_error_msg = "⚠️ **条件筛选模型认证失败**\n\n"
+                llm_error_msg += "**错误原因：** API Key 无效或权限不足\n\n"
+                llm_error_msg += "**请按以下步骤修复：**\n"
+                llm_error_msg += "1. 在配置中心检查'条件筛选服务密钥'是否正确\n"
+                llm_error_msg += "2. 确认 API Key 是否已过期或被禁用\n"
+                llm_error_msg += "3. 验证 API Key 是否有权限访问该模型\n"
+                llm_error_msg += "4. 如需更换，请在服务商网站重新生成 API Key\n"
+            elif "404" in error_str or "Not Found" in error_str:
+                llm_error_msg = "⚠️ **条件筛选模型接口不存在**\n\n"
+                llm_error_msg += "**错误原因：** 服务地址或模型名称不正确\n\n"
+                llm_error_msg += "**请按以下步骤修复：**\n"
+                llm_error_msg += "1. 检查服务地址是否完整（通常需要 `/v1` 后缀）\n"
+                llm_error_msg += "2. 确认模型名称是否正确（如 `deepseek-chat`、`glm-4` 等）\n"
+                llm_error_msg += "3. 在配置中心点击'测试条件筛选模型'按钮验证\n"
+            else:
+                llm_error_msg = "⚠️ **条件筛选模型调用失败**\n\n"
+                llm_error_msg += f"**错误信息：** {error_str[:200]}\n\n"
+                llm_error_msg += "**建议操作：**\n"
+                llm_error_msg += "1. 在配置中心点击'测试条件筛选模型'按钮查看详细错误\n"
+                llm_error_msg += "2. 检查配置中心的服务日志\n"
+                llm_error_msg += "3. 稍后重试或联系技术支持\n"
+
+        # 如果有错误信息，将其作为分析结果返回
+        if llm_error_msg:
+            ai_analysis = llm_error_msg
+
+        return {
+            "status": "success",
+            "data": {
+                "basic_info": {
+                    "code": stock_data.get("code"),
+                    "name": stock_data.get("name"),
+                    "price": stock_data.get("price"),
+                    "change_pct": stock_data.get("change_pct"),
+                    "amount": stock_data.get("amount"),
+                    "turnover": stock_data.get("turnover"),
+                    "float_mv": stock_data.get("float_mv"),
+                    "price_date": stock_data.get("price_date"),
+                },
+                "matched_reasons": matched_reasons,
+                "ai_analysis": ai_analysis,
+                "risk_warnings": risk_warnings,
+                "llm_available": not bool(llm_error_msg),
+            },
+        }
+    except Exception as e:
+        logger.error(f"/api/screener/ai_analyze_stock failed: {e}", exc_info=True)
         return {"status": "error", "msg": str(e)}
 
 
@@ -11465,7 +11739,10 @@ async def startup_event():
 
     _mark_stage("pattern_thumb_warmup_task")
     t0 = time.time()
-    _ensure_pattern_thumb_warmup_task()
+    # 暂时禁用经典形态缩略图预热，因为 mplfinance 渲染导致段错误（Segmentation fault）
+    # TODO: 调查 matplotlib/mplfinance 段错误的根本原因
+    # _ensure_pattern_thumb_warmup_task()
+    logger.warning("[startup] pattern_thumb_warmup_task disabled due to segmentation fault in mplfinance")
     logger.info(f"[startup] _ensure_pattern_thumb_warmup_task done in {time.time()-t0:.2f}s")
     print(f"[startup] _ensure_pattern_thumb_warmup_task done in {time.time()-t0:.2f}s")
 
@@ -11498,11 +11775,37 @@ async def startup_event():
         # 自动实盘启动调度器始终常驻，由运行模式决定是否触发。
         live_auto_start_scheduler_task = asyncio.create_task(_live_auto_start_scheduler_loop())
 
+    # 条件筛选后台自动刷新循环：每分钟判定数据是否最新，不最新则拉一次并写 DuckDB/缓存
+    try:
+        from src.utils.screener_auto_refresh import refresh_loop
+        global screener_auto_refresh_task
+        if screener_auto_refresh_task is None or screener_auto_refresh_task.done():
+            screener_auto_refresh_task = asyncio.create_task(refresh_loop())
+            logger.info("[startup] screener auto refresh task scheduled")
+    except Exception as e:
+        logger.warning(f"[startup] screener auto refresh disabled: {e}")
+
     _mark_stage("evolution_setup")
     t0 = time.time()
     evolution_runtime.set_event_sink(_push_evolution_ws_event)
     evolution_platform_hub.set_event_sink(_push_evolution_ws_event)
     evolution_platform_hub.start_services(auto_backup=bool(cfg.get("evolution.platform.auto_backup_enabled", False)))
+    # 后台预热条件筛选"严格示例"探测缓存，避免首次打开弹窗时只能看到基础示例。
+    # 暂时禁用，因为可能导致段错误
+    # try:
+    #     from src.evolution.adapters.screener_strategy_demo_adapter import warm_strict_demo_probe
+    #
+    #     def _warm_demo_probe() -> None:
+    #         try:
+    #             ok = warm_strict_demo_probe()
+    #             logger.info(f"[startup] screener strict demo probe done, available={ok}")
+    #         except Exception as e:
+    #             logger.warning(f"[startup] screener strict demo probe failed: {e}")
+    #
+    #     threading.Thread(target=_warm_demo_probe, name="screener-demo-probe-warmup", daemon=True).start()
+    # except Exception as e:
+    #     logger.warning(f"[startup] screener demo probe warmup skipped: {e}")
+    logger.info("[startup] screener demo probe warmup disabled")
     logger.info(f"[startup] evolution setup done in {time.time()-t0:.2f}s")
     print(f"[startup] evolution setup done in {time.time()-t0:.2f}s")
 
@@ -11519,11 +11822,11 @@ async def startup_event():
     _update_startup_trace(stage="startup_done", status="ready", detail=f"all stages done in {time.time() - startup_trace['started_at']:.2f}s")
 
 async def shutdown_event():
-    global history_sync_scheduler_task, evolution_ws_pump_task, live_auto_start_scheduler_task
+    global history_sync_scheduler_task, evolution_ws_pump_task, live_auto_start_scheduler_task, screener_auto_refresh_task
     if not str(SERVER_SHUTDOWN_CONTEXT.get("reason", "") or "").strip():
         _mark_server_shutdown_reason(reason="shutdown_event", detail="lifecycle shutdown event", origin="fastapi", overwrite=True)
     logger.warning(
-        "Shutdown event triggered reason=%s detail=%s origin=%s signal=%s cabinet_running=%s live_codes=%s history_sync_running=%s live_auto_start_running=%s evolution_running=%s",
+        "Shutdown event triggered reason=%s detail=%s origin=%s signal=%s cabinet_running=%s live_codes=%s history_sync_running=%s live_auto_start_running=%s screener_auto_refresh_running=%s evolution_running=%s",
         SERVER_SHUTDOWN_CONTEXT.get("reason", ""),
         SERVER_SHUTDOWN_CONTEXT.get("detail", ""),
         SERVER_SHUTDOWN_CONTEXT.get("origin", ""),
@@ -11532,6 +11835,7 @@ async def shutdown_event():
         _live_running_codes(),
         bool(history_sync_scheduler_task and not history_sync_scheduler_task.done()) if history_sync_scheduler_task is not None else False,
         bool(live_auto_start_scheduler_task and not live_auto_start_scheduler_task.done()) if live_auto_start_scheduler_task is not None else False,
+        bool(screener_auto_refresh_task and not screener_auto_refresh_task.done()) if screener_auto_refresh_task is not None else False,
         bool(evolution_runtime.status().get("running", False)),
     )
     if cabinet_task:
@@ -11542,6 +11846,8 @@ async def shutdown_event():
         history_sync_scheduler_task.cancel()
     if live_auto_start_scheduler_task and not live_auto_start_scheduler_task.done():
         live_auto_start_scheduler_task.cancel()
+    if screener_auto_refresh_task and not screener_auto_refresh_task.done():
+        screener_auto_refresh_task.cancel()
     evolution_runtime.set_event_sink(None)
     evolution_runtime.stop()
     await evolution_platform_hub.stop_services()

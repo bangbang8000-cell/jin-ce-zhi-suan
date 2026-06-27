@@ -476,3 +476,158 @@ class JqdataProvider:
         self.username = username
         self.password = password
         self._login()
+
+    def fetch_financial_data(self, codes: list, date: str) -> dict:
+        """
+        批量获取财务数据
+
+        Args:
+            codes: 股票代码列表（如 ["600000.SH", "000001.SZ"]）
+            date: 查询日期（如 "2026-06-23"）
+
+        Returns:
+            {
+                "600000.SH": {
+                    "pe_ttm": 8.5,
+                    "pb": 0.6,
+                    "ps_ttm": 2.3,
+                    "roe": 12.5,
+                    "roa": 1.2,
+                    "gross_margin": 45.2,
+                    "net_margin": 28.3,
+                    "revenue_yoy": 15.6,
+                    "profit_yoy": 18.9
+                },
+                ...
+            }
+        """
+        if not self._ensure_connected():
+            self.last_error = "JQData 未连接"
+            return {}
+
+        if not codes:
+            return {}
+
+        result = {}
+
+        try:
+            from jqdatasdk import get_fundamentals, valuation, indicator, stat
+
+            # 转换代码格式：600000.SH -> 600000.XSHG
+            jq_codes = [self._to_jqdata_code(code) for code in codes]
+
+            # 1. 获取估值指标（PE/PB/PS）- 从 valuation 表
+            q_valuation = get_fundamentals(
+                query(
+                    valuation.code,
+                    valuation.pe_ratio,
+                    valuation.pb_ratio,
+                    valuation.ps_ratio
+                ).filter(
+                    valuation.code.in_(jq_codes)
+                ),
+                date=date
+            )
+
+            if q_valuation is not None and not q_valuation.empty:
+                for _, row in q_valuation.iterrows():
+                    # 转换回标准代码格式：600000.XSHG -> 600000.SH
+                    jq_code = row['code']
+                    code = self._from_jqdata_code(jq_code)
+
+                    if code not in result:
+                        result[code] = {}
+
+                    # 估值指标
+                    if pd.notna(row.get('pe_ratio')):
+                        result[code]['pe_ttm'] = float(row['pe_ratio'])
+                    if pd.notna(row.get('pb_ratio')):
+                        result[code]['pb'] = float(row['pb_ratio'])
+                    if pd.notna(row.get('ps_ratio')):
+                        result[code]['ps_ttm'] = float(row['ps_ratio'])
+
+            # 2. 获取财务指标（ROE/ROA/毛利率/净利率）- 从 indicator 表
+            q_indicator = get_fundamentals(
+                query(
+                    indicator.code,
+                    indicator.roe,
+                    indicator.roa,
+                    indicator.gross_profit_margin,
+                    indicator.net_profit_margin
+                ).filter(
+                    indicator.code.in_(jq_codes)
+                ),
+                date=date
+            )
+
+            if q_indicator is not None and not q_indicator.empty:
+                for _, row in q_indicator.iterrows():
+                    jq_code = row['code']
+                    code = self._from_jqdata_code(jq_code)
+
+                    if code not in result:
+                        result[code] = {}
+
+                    # 盈利指标
+                    if pd.notna(row.get('roe')):
+                        result[code]['roe'] = float(row['roe'])
+                    if pd.notna(row.get('roa')):
+                        result[code]['roa'] = float(row['roa'])
+                    if pd.notna(row.get('gross_profit_margin')):
+                        result[code]['gross_margin'] = float(row['gross_profit_margin'])
+                    if pd.notna(row.get('net_profit_margin')):
+                        result[code]['net_margin'] = float(row['net_profit_margin'])
+
+            # 3. 获取成长性指标（营收同比/利润同比）- 从 stat 表
+            q_stat = get_fundamentals(
+                query(
+                    stat.code,
+                    stat.inc_revenue_year_on_year,
+                    stat.inc_net_profit_year_on_year
+                ).filter(
+                    stat.code.in_(jq_codes)
+                ),
+                date=date
+            )
+
+            if q_stat is not None and not q_stat.empty:
+                for _, row in q_stat.iterrows():
+                    jq_code = row['code']
+                    code = self._from_jqdata_code(jq_code)
+
+                    if code not in result:
+                        result[code] = {}
+
+                    # 成长性指标
+                    if pd.notna(row.get('inc_revenue_year_on_year')):
+                        result[code]['revenue_yoy'] = float(row['inc_revenue_year_on_year'])
+                    if pd.notna(row.get('inc_net_profit_year_on_year')):
+                        result[code]['profit_yoy'] = float(row['inc_net_profit_year_on_year'])
+
+            self.last_error = ""
+            return result
+
+        except Exception as e:
+            err_text = str(e)
+            self.last_error = f"fetch_financial_data_failed date={date} err={err_text}"
+            return result  # 返回已获取的部分数据
+
+    def _from_jqdata_code(self, jq_code: str) -> str:
+        """
+        转换 JQData 代码格式为标准格式
+        600000.XSHG -> 600000.SH
+        000001.XSHE -> 000001.SZ
+        """
+        if not jq_code or '.' not in jq_code:
+            return jq_code
+
+        parts = jq_code.split('.')
+        code = parts[0]
+        exchange = parts[1].upper()
+
+        if exchange == 'XSHG':
+            return f"{code}.SH"
+        elif exchange == 'XSHE':
+            return f"{code}.SZ"
+        else:
+            return jq_code
