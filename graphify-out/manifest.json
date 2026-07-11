@@ -80,8 +80,8 @@
     "semantic_hash": "3896feb62b9eb4536e1ea8dc45552d88"
   },
   "server.py": {
-    "mtime": 1782563579.520568,
-    "ast_hash": "594a3a15261fcc0c816938efaeecb820",
+    "mtime": 1783780392.5929573,
+    "ast_hash": "610f7a328169360df179432cd5d466c4",
     "semantic_hash": ""
   },
   "src/consistency/__init__.py": {
@@ -200,9 +200,9 @@
     "semantic_hash": "b0e1a1cd628649669eed06f722f31336"
   },
   "src/evolution/adapters/fundamental_adapter.py": {
-    "mtime": 1776995535.8892443,
-    "ast_hash": "c8badec4e376322913b02a2df14b306e",
-    "semantic_hash": "c8badec4e376322913b02a2df14b306e"
+    "mtime": 1783781236.5297987,
+    "ast_hash": "92db1f2ef60a4d89c7ec8286bfbc4f52",
+    "semantic_hash": ""
   },
   "src/evolution/adapters/gene_strategy_adapter.py": {
     "mtime": 1777193273.0077138,
@@ -500,9 +500,9 @@
     "semantic_hash": "ffb5022e7a03e1b29631ea4cf56fa6b2"
   },
   "src/utils/config_loader.py": {
-    "mtime": 1777647152.7285416,
-    "ast_hash": "62d9c7b11d9a50d964ee09e29b9dc8aa",
-    "semantic_hash": "62d9c7b11d9a50d964ee09e29b9dc8aa"
+    "mtime": 1783779027.4951422,
+    "ast_hash": "a1a19582dc83168705d41a8ec414cabb",
+    "semantic_hash": ""
   },
   "src/utils/constants.py": {
     "mtime": 1774627104.2196927,
@@ -585,9 +585,9 @@
     "semantic_hash": "312f97cd3dee1684847c7081188332f0"
   },
   "src/utils/tushare_provider.py": {
-    "mtime": 1782276272.2074046,
-    "ast_hash": "63e592baca0691924e22b857766028f3",
-    "semantic_hash": "63e592baca0691924e22b857766028f3"
+    "mtime": 1783780535.3505983,
+    "ast_hash": "535f4409fdfdff3078b37490c42cfdbe",
+    "semantic_hash": ""
   },
   "src/utils/webhook_notifier.py": {
     "mtime": 1779117392.5603683,
@@ -625,8 +625,8 @@
     "semantic_hash": ""
   },
   "dashboard.html": {
-    "mtime": 1782628619.0420628,
-    "ast_hash": "47fef78ac945889d3f9873549fab7c83",
+    "mtime": 1783779027.4906113,
+    "ast_hash": "8996b8369140396f7dc24103e3ab5902",
     "semantic_hash": ""
   },
   "debug_headers.txt": {
@@ -735,8 +735,8 @@
     "semantic_hash": ""
   },
   "requirements.txt": {
-    "mtime": 1778832446.9635308,
-    "ast_hash": "7064aa550342d9037927600a1a34aa57",
+    "mtime": 1783779027.4921165,
+    "ast_hash": "eccf0354988365cb6c5c706d80d7bb18",
     "semantic_hash": ""
   },
   "logo.png": {
