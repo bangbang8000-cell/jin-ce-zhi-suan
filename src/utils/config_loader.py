@@ -70,6 +70,11 @@ class ConfigLoader:
         private_passthrough = self._extract_private_passthrough_config(private_config_raw)
         merged_private = self._deep_merge_dict(private_config, private_passthrough)
         self._config = self._deep_merge_dict(base_config, merged_private)
+        # 启动时自动迁移：若 private 文件缺失但 base config 里残留了密钥字段，
+        # 将其转入 private 文件，避免后续 UI 提交密钥被 _save_split_config 丢弃。
+        # 注意：使用 base_config_path 的绝对路径，避免依赖当前 CWD。
+        abs_base = base_config_path if os.path.isabs(base_config_path) else os.path.join(project_root, base_config_path)
+        self._migrate_public_secrets_to_private(abs_base, private_config_path)
 
     def _load_json_config(self, config_path, silent=False):
         import re
@@ -257,6 +262,47 @@ class ConfigLoader:
     def to_dict(self):
         return json.loads(json.dumps(self._config, ensure_ascii=False))
 
+    def to_dict_with_secrets(self):
+        """返回包含真实密钥的深拷贝。仅供内部运行期校验（如连通性测试）使用，
+        不对外暴露给前端或日志，避免脱敏语义被绕过。"""
+        return self.to_dict()
+
+    def _migrate_public_secrets_to_private(self, base_config_path, private_config_path):
+        """启动期自动迁移：若 private 文件缺失但 base config 里残留了密钥字段，
+        将其转入 private 文件，避免后续 UI 提交密钥被 _save_split_config 丢弃。"""
+        if os.path.exists(private_config_path):
+            return
+        try:
+            if not os.path.exists(base_config_path):
+                return
+            public_cfg = self._load_json_config(base_config_path, silent=True)
+            if not isinstance(public_cfg, dict):
+                return
+            secret_paths = self.resolve_private_override_paths(public_cfg)
+            secrets_to_migrate = {}
+            public_changed = False
+            for path in secret_paths:
+                if not self._path_exists(public_cfg, path):
+                    continue
+                val = self._get_path_value(public_cfg, path, "")
+                text = str(val or "").strip()
+                if not text:
+                    continue
+                secrets_to_migrate[path] = text
+                self._set_path_value(public_cfg, path, "")
+                public_changed = True
+            if not secrets_to_migrate:
+                return
+            private_cfg: dict = {}
+            for path, val in secrets_to_migrate.items():
+                self._set_path_value(private_cfg, path, val)
+            self._write_json_file(private_config_path, private_cfg)
+            if public_changed:
+                self._write_json_file(base_config_path, public_cfg)
+            self.load_config(base_config_path)
+        except Exception:
+            return
+
     def save(self, config_path="config.json"):
         project_root = self._project_root()
         target_path = config_path if os.path.isabs(config_path) else os.path.join(project_root, config_path)
@@ -291,6 +337,23 @@ class ConfigLoader:
         private_changed = False
 
         if not private_exists:
+            # 没有 private 文件时，如果本次保存携带了密钥字段，
+            # 自动创建 private 文件承接，避免密钥丢失或继续残留在 config.json。
+            secret_updates_for_create = {}
+            for path in secret_paths:
+                val = self._get_path_value(full_cfg, path, "")
+                text = str(val or "").strip()
+                if text:
+                    secret_updates_for_create[path] = text
+            if secret_updates_for_create:
+                new_private_cfg: dict = {}
+                for path, val in secret_updates_for_create.items():
+                    self._set_path_value(new_private_cfg, path, val)
+                self._write_json_file(private_path, new_private_cfg)
+                for path in secret_paths:
+                    if self._path_exists(public_cfg, path):
+                        self._set_path_value(public_cfg, path, "")
+                self._write_json_file(target_path, public_cfg)
             return ConfigLoader.reload(target_path)
 
         for path in secret_paths:

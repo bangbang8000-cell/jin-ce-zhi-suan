@@ -596,8 +596,6 @@ class TushareProvider:
 
     def set_token(self, token):
         self.token = token
-        import tushare.pro.client as client
-        client.DataApi._DataApi__http_url = self._tushare_http_url
         ts.set_token(self.token)
         self.pro = ts.pro_api()
         self.last_error = ""
@@ -900,19 +898,32 @@ class TushareProvider:
             return pd.DataFrame()
 
     def check_connectivity(self, code):
-        if not self.pro:
+        # 连通性验证改用 stock_company（交易所上市公司基础信息），
+        # 避免 stk_mins 1次/分钟的严苛频率限制导致误报"连通失败"。
+        # code 仅用于兼容旧签名；stock_company 按交易所查询，不依赖个股。
+        # 注意：此处直接用 ts.pro_api(token) 拿一个干净的 pro 对象，
+        # 绕开 self.pro 可能已被 set_token 修改全局 DataApi URL 的副作用，
+        # 让连通性测试只验证 token 有效性、不被 URL 配置差异污染。
+        if not self.token:
             return False, "tushare_token 未配置"
-        now = datetime.now()
-        start_time = now - timedelta(days=3)
+        import tushare as ts
+        exchange = "SZSE"
+        code_str = str(code or "").upper()
+        if code_str.endswith(".SH"):
+            exchange = "SSE"
+        elif code_str.endswith(".BJ"):
+            exchange = "BSE"
         try:
-            _ = self.pro.stk_mins(
-                ts_code=str(code).upper(),
-                freq='1min',
-                start_date=start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                end_date=now.strftime("%Y-%m-%d %H:%M:%S")
+            pro = ts.pro_api(self.token)
+            df = pro.stock_company(
+                exchange=exchange,
+                fields="ts_code,chairman,manager,secretary,reg_capital,setup_date,province",
             )
+            # 部分端点对 stock_company 返回空但 token 仍可用；
+            # 只要调用未抛鉴权/网络异常，即视为连通成功。
             self.last_error = ""
-            return True, "ok"
+            rows = 0 if df is None else len(df)
+            return True, f"ok (rows={rows})"
         except Exception as e:
             err_text = str(e)
             self.last_error = err_text

@@ -6733,7 +6733,7 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 title: '工部数据源',
                 subtitle: '主数据源与回退策略',
                 fields: [
-                    { path: 'data_provider.source', label: '主数据源', type: 'select', options: [{ value: 'default', label: 'default' }, { value: 'akshare', label: 'akshare' }, { value: 'tushare', label: 'tushare' }, { value: 'mysql', label: 'mysql' }, { value: 'postgresql', label: 'postgresql' }, { value: 'duckdb', label: 'duckdb' }, { value: 'tdx', label: 'tdx' }] },
+                    { path: 'data_provider.source', label: '主数据源', type: 'select', options: [{ value: 'default', label: 'default' }, { value: 'akshare', label: 'akshare' }, { value: 'tushare', label: 'tushare' }, { value: 'mysql', label: 'mysql' }, { value: 'postgresql', label: 'postgresql' }, { value: 'duckdb', label: 'duckdb' }, { value: 'tdx', label: 'tdx' }, { value: 'baostock', label: 'baostock' }, { value: 'jqdata', label: 'jqdata' }] },
                     { path: 'data_provider.enable_fallback', label: '启用数据回退', type: 'boolean' },
                     { path: 'live_monitoring.minute_close_confirm.enabled', label: '分钟收盘确认触发', type: 'boolean', desc: '开启后近似实时信号在下一分钟到来时，按上一分钟已收盘K线触发，减少分钟内抖动误触发。' },
                     { path: 'data_provider.backtest_cache_db_source', label: '回测缓存落库源', type: 'select', options: [{ value: '', label: '关闭' }, { value: 'mysql', label: 'mysql' }, { value: 'postgresql', label: 'postgresql' }, { value: 'duckdb', label: 'duckdb' }] },
@@ -6748,6 +6748,8 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     { path: 'data_provider.tdx_max_bars', label: 'TDX最大拉取条数', type: 'number', min: 500, max: 100000, step: 500, when: [{ path: 'data_provider.source', equals: 'tdx' }] },
                     { path: 'data_provider.default_api_key', label: '默认数据服务密钥', type: 'password', secret: true, when: [{ path: 'data_provider.source', equals: 'default' }] },
                     { path: 'data_provider.default_api_url', label: '默认数据服务地址', type: 'text', when: [{ path: 'data_provider.source', equals: 'default' }] },
+                    { path: 'data_provider.jqdata_username', label: 'JQData用户名', type: 'text', when: [{ path: 'data_provider.source', equals: 'jqdata' }] },
+                    { path: 'data_provider.jqdata_password', label: 'JQData密码', type: 'password', secret: true, when: [{ path: 'data_provider.source', equals: 'jqdata' }] },
                     { path: 'data_provider.duckdb_path', label: 'DuckDB文件路径', type: 'text', when: [{ path: 'data_provider.source', equals: 'duckdb' }] },
                     { path: 'data_provider.duckdb_query_page_size', label: 'DuckDB分页批量', type: 'number', min: 1000, max: 1000000, step: 1000, when: [{ path: 'data_provider.source', equals: 'duckdb' }] },
                     { path: 'data_provider.duckdb_table_1min', label: 'DuckDB 1分钟表', type: 'text', when: [{ path: 'data_provider.source', equals: 'duckdb' }] },

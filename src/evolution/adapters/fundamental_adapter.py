@@ -19,7 +19,6 @@ FUNDAMENTAL_INTERFACE_CATALOG: List[Dict[str, Any]] = [
         "interfaces": [
             {"key": "stock_basic", "label": "股票基础信息", "api": "stock_basic", "cost_level": "low"},
             {"key": "company", "label": "公司概况", "api": "stock_company", "cost_level": "low"},
-            {"key": "concept_detail", "label": "概念题材明细", "api": "concept_detail", "cost_level": "medium"},
         ],
     },
     {
@@ -455,8 +454,6 @@ class FundamentalAdapterManager:
                 df = pro.stock_basic(ts_code=ts_code)
             elif key == "company":
                 df = pro.stock_company(ts_code=ts_code)
-            elif key == "concept_detail":
-                df = pro.concept_detail(ts_code=ts_code)
             elif key == "daily_basic":
                 df = pro.daily_basic(ts_code=ts_code, start_date=start_date, end_date=end_date)
             elif key == "moneyflow":

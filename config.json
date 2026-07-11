@@ -31,7 +31,7 @@
     ]
   },
   "data_provider": {
-    "source": "tdx",
+    "source": "duckdb",
     "enable_fallback": false,
     "tushare_api_url": "http://api.tushare.pro",
     "tushare_token": "",
@@ -153,7 +153,7 @@
   },
   "trading_cost": {
     "commission_rate": 0.00025,
-    "min_commission": 5,
+    "min_commission": 5.0,
     "stamp_duty": 0.001,
     "transfer_fee": 0
   },

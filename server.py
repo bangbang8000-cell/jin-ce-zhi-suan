@@ -66,6 +66,8 @@ from src.utils.mysql_provider import MysqlProvider
 from src.utils.postgres_provider import PostgresProvider
 from src.utils.duckdb_provider import DuckDbProvider
 from src.utils.tdx_provider import TdxProvider
+from src.utils.baostock_provider import BaostockProvider
+from src.utils.jqdata_provider import JqdataProvider
 from src.utils.history_sync_service import HistoryDiffSyncService, TABLE_INTERVAL_MAP, DEFAULT_SYNC_TABLES, normalize_history_sync_tables
 from src.utils.stock_list_refresh import RuntimeConfigView, build_refresh_clients, refresh_stock_list
 from src.utils.backtest_baseline import apply_backtest_baseline
@@ -1724,6 +1726,17 @@ def _save_split_config(incoming):
     _write_json_file(public_path, public_cfg)
 
     if not private_exists:
+        # 没有 private 文件时，若本次提交携带了密钥（真实 token 而非 ********），
+        # 自动创建 private 文件承接，避免密钥被静默丢弃导致连通性测试报"未配置"。
+        if secret_updates:
+            new_private_cfg: dict = {}
+            for path, val in secret_updates.items():
+                text = str(val or "").strip()
+                if text:
+                    _set_path_value(new_private_cfg, path, text)
+            if new_private_cfg:
+                _write_json_file(private_path, new_private_cfg)
+                private_exists = True
         return ConfigLoader.reload()
 
     if secret_updates or private_only_updates:
@@ -1769,6 +1782,13 @@ def _build_provider_by_source(source: str, cfg=None):
         return DuckDbProvider()
     if s == "tdx":
         return TdxProvider()
+    if s == "baostock":
+        return BaostockProvider()
+    if s == "jqdata":
+        return JqdataProvider(
+            username=c.get("data_provider.jqdata_username"),
+            password=c.get("data_provider.jqdata_password"),
+        )
     return DataProvider(
         api_key=c.get("data_provider.default_api_key", ""),
         base_url=c.get("data_provider.default_api_url", "")
@@ -1787,15 +1807,19 @@ def _check_provider_connectivity_for_code(provider, provider_source: str, stock_
             pro = getattr(provider, "pro", None)
             if pro is None:
                 return False, "tushare_token 未配置"
-            now = datetime.now()
-            start_time = now - timedelta(days=3)
-            pro.stk_mins(
-                ts_code=code,
-                freq="1min",
-                start_date=start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                end_date=now.strftime("%Y-%m-%d %H:%M:%S")
+            exchange = "SZSE"
+            code_upper = code.upper()
+            if code_upper.endswith(".SH"):
+                exchange = "SSE"
+            elif code_upper.endswith(".BJ"):
+                exchange = "BSE"
+            df = pro.stock_company(
+                exchange=exchange,
+                fields="ts_code,chairman,manager,secretary,reg_capital,setup_date,province",
             )
-            return True, "ok"
+            if df is None or df.empty:
+                return False, f"stock_company 返回为空（exchange={exchange}）"
+            return True, f"ok (rows={len(df)})"
         if src == "akshare":
             bar = provider.get_latest_bar(code)
             if bar:
@@ -1805,23 +1829,43 @@ def _check_provider_connectivity_for_code(provider, provider_source: str, stock_
     except Exception as e:
         return False, str(e)
 
+class _DottedPathDict(dict):
+    """兼容 dotted-path 访问的 dict 包装。
+    _build_runtime_connectivity_provider / _run_*_connectivity_check 等函数大量使用
+    cfg.get("data_provider.xxx")，但上游传入的 cfg 是普通嵌套 dict，dict.get 不支持
+    dotted path，导致 token / 密码等敏感字段永远读到空值，连通性测试误报"未配置"。
+    用薄包装统一兼容两种访问方式，不破坏 dict 协议（json.dumps 仍可序列化）。"""
+
+    def get(self, key, default=None):
+        if isinstance(key, str) and "." in key:
+            cur = self
+            for part in key.split("."):
+                if isinstance(cur, dict) and part in cur:
+                    cur = cur[part]
+                else:
+                    return default
+            return cur
+        return super().get(key, default)
+
+
 def _build_runtime_test_config(incoming_config: Optional[dict] = None) -> Dict[str, Any]:
-    # 连通性测试优先使用“表单草稿 + 当前磁盘配置”的合并结果，确保未保存的 UI 修改也能参与测试。
+    # 连通性测试优先使用"表单草稿 + 当前磁盘配置"的合并结果，确保未保存的 UI 修改也能参与测试。
     loader = ConfigLoader.reload()
-    if hasattr(loader, "to_dict") and callable(getattr(loader, "to_dict")):
+    # 使用 to_dict_with_secrets 拿到未脱敏的磁盘配置，避免 UI 返回的 ******** 掩码污染 base。
+    if hasattr(loader, "to_dict_with_secrets") and callable(getattr(loader, "to_dict_with_secrets")):
+        base_cfg = loader.to_dict_with_secrets()
+    elif hasattr(loader, "to_dict") and callable(getattr(loader, "to_dict")):
         base_cfg = loader.to_dict()
     else:
         base_cfg = {}
     patch_cfg = incoming_config if isinstance(incoming_config, dict) else {}
     sanitized_patch = json.loads(json.dumps(patch_cfg, ensure_ascii=False))
-    merged_candidate = _deep_merge_dict(base_cfg, sanitized_patch)
-    # 私密字段若仍是掩码值，回退到当前生效配置，避免把 ******** 当成真实凭据参与测试。
-    for path in _secret_config_paths(merged_candidate):
-        if not _path_exists(sanitized_patch, path):
-            continue
+    # 只要 patch 里的敏感字段仍是掩码（用户未改），就从 patch 里删除，
+    # 让 base 的真实值保留参与测试；用户修改后的新值会正常覆盖 base。
+    for path in _secret_config_paths(base_cfg):
         if _is_secret_mask_value(_get_path_value(sanitized_patch, path, "")):
             _delete_path_value(sanitized_patch, path)
-    return _deep_merge_dict(base_cfg, sanitized_patch)
+    return _DottedPathDict(_deep_merge_dict(base_cfg, sanitized_patch))
 
 def _bind_runtime_table_name_resolver(provider: Any, cfg: Dict[str, Any], prefix: str) -> Any:
     # 为数据库类 provider 注入“当前测试配置”的表名解析，避免未保存配置时仍读取磁盘旧值。

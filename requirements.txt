@@ -11,6 +11,8 @@ tushare
 akshare
 pytdx
 mootdx
+baostock
+jqdatasdk
 fastapi
 uvicorn[standard]
 pydantic
