@@ -6851,7 +6851,7 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                 subtitle: 'Evolution 生成策略专用大模型配置（建议密钥走私有配置）',
                 field_groups: [
                     { key: 'basic', name: '基础', defaultOpen: true, paths: ['evolution.llm.enabled', 'evolution.llm.provider', 'evolution.llm.model'] },
-                    { key: 'network', name: '网络', defaultOpen: true, paths: ['evolution.llm.base_url', 'evolution.llm.timeout_seconds', 'evolution.llm.retry_times'] },
+                    { key: 'network', name: '网络', defaultOpen: true, paths: ['evolution.llm.base_url', 'evolution.llm.timeout_seconds', 'evolution.llm.retry_times', 'evolution.llm.ssl_verify'] },
                     { key: 'security', name: '安全', defaultOpen: false, paths: ['evolution.llm.api_key', 'evolution.llm.fallback_to_mock'] },
                     { key: 'generation', name: '生成策略', defaultOpen: false, paths: ['evolution.llm.temperature', 'evolution.llm.max_tokens', 'evolution.llm.system_prompt'] }
                 ],
@@ -6866,6 +6866,7 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                     { path: 'evolution.llm.max_tokens', label: '最大输出Token', type: 'number', min: 128, max: 8000, step: 1, slider: true },
                     { path: 'evolution.llm.timeout_seconds', label: '请求超时(秒)', type: 'number', min: 5, max: 300, step: 1, slider: true },
                     { path: 'evolution.llm.retry_times', label: '失败重试次数', type: 'number', min: 0, max: 5, step: 1, slider: true },
+                    { path: 'evolution.llm.ssl_verify', label: '校验SSL证书', type: 'boolean', default: true, desc: '默认开启。走自签名/内网代理（公司网关、本地HTTPS反代等）访问LLM时可关闭，跳过证书校验' },
                     { path: 'evolution.llm.fallback_to_mock', label: '失败回退Mock', type: 'boolean', desc: '开启后真实LLM失败会自动回退到Mock，保证进化流程不中断' },
                     { path: 'evolution.llm.system_prompt', label: '系统提示词', type: 'text', placeholder: '用于约束策略生成风格与输出格式' }
                 ]
@@ -7075,6 +7076,7 @@ class GeneratedStrategyTemplate(BaseImplementedStrategy):
                             { path: 'evolution.llm.max_tokens', label: '最大输出Token', type: 'number', min: 128, max: 8000, step: 1, slider: true },
                             { path: 'evolution.llm.timeout_seconds', label: '请求超时(秒)', type: 'number', min: 5, max: 300, step: 1, slider: true },
                             { path: 'evolution.llm.retry_times', label: '失败重试次数', type: 'number', min: 0, max: 5, step: 1, slider: true },
+                            { path: 'evolution.llm.ssl_verify', label: '校验SSL证书', type: 'boolean', default: true, desc: '默认开启。走自签名/内网代理访问LLM时可关闭', uiRelations: [{ area: '模型连通性测试', effect: '控制是否跳过SSL证书校验' }] },
                             { path: 'evolution.llm.fallback_to_mock', label: '失败回退Mock', type: 'boolean', desc: '开启后真实LLM失败会自动回退到Mock，保证进化流程不中断' },
                             { path: 'evolution.llm.system_prompt', label: '系统提示词', type: 'text', placeholder: '用于约束策略生成风格与输出格式' }
                         ]

@@ -153,7 +153,7 @@
   },
   "trading_cost": {
     "commission_rate": 0.00025,
-    "min_commission": 5.0,
+    "min_commission": 5,
     "stamp_duty": 0.001,
     "transfer_fee": 0
   },
@@ -442,10 +442,11 @@
       "base_url": "https://api.deepseek.com",
       "timeout_seconds": 120,
       "retry_times": 1,
-      "api_key": "",
+      "api_key": "sk-067ee948a8734958b3b96099eb433d3f",
       "fallback_to_mock": false,
       "temperature": 0.2,
       "max_tokens": 1200,
+      "ssl_verify": false,
       "system_prompt": "你是量化策略生成助手。只输出可执行Python策略代码（不要解释、不要markdown）。必须继承BaseImplementedStrategy，并实现on_bar。禁止使用未来函数/回看偏差。遵守A股规则：T+1、涨停不可买、跌停不可卖。"
     },
     "data_sources": {

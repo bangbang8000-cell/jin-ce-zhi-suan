@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -72,10 +73,12 @@ class UnifiedLLMConfig:
     retry_times: int = 1
     default_temperature: float = 0.2
     default_max_tokens: int = 1200
+    ssl_verify: bool = True
     provider_source: str = ""
     api_key_source: str = ""
     base_url_source: str = ""
     model_source: str = ""
+    ssl_verify_source: str = ""
 
     @classmethod
     def from_config(cls, cfg: ConfigLoader) -> "UnifiedLLMConfig":
@@ -197,6 +200,38 @@ class UnifiedLLMConfig:
             or cfg.get("data_provider.strategy_llm_retry_times", 0)
             or 1
         )
+        # ssl_verify: 默认 True；任意来源显式为 false/0/"false"/"0"/"no" 时关闭证书校验。
+        # 用于通过自签名代理（公司网关、本地 HTTPS 反代等）访问 LLM 的场景。
+        def _parse_bool_flag(value: Any) -> tuple[bool, bool]:
+            if value is None or value == "":
+                return True, False
+            if isinstance(value, bool):
+                return bool(value), True
+            text = str(value).strip().lower()
+            if text in {"0", "false", "no", "off", "disable", "disabled"}:
+                return False, True
+            if text in {"1", "true", "yes", "on", "enable", "enabled"}:
+                return True, True
+            return True, False
+
+        ssl_verify_raw: Any = None
+        ssl_verify_src = ""
+        for source, raw in [
+            ("env:LLM_SSL_VERIFY", os.environ.get("LLM_SSL_VERIFY")),
+            ("env:EVOLUTION_LLM_SSL_VERIFY", os.environ.get("EVOLUTION_LLM_SSL_VERIFY")),
+            ("evolution.llm.ssl_verify", cfg.get("evolution.llm.ssl_verify", "")),
+            ("data_provider.llm_ssl_verify", cfg.get("data_provider.llm_ssl_verify", "")),
+            ("data_provider.strategy_llm_ssl_verify", cfg.get("data_provider.strategy_llm_ssl_verify", "")),
+            ("data_provider.screener_llm_ssl_verify", cfg.get("data_provider.screener_llm_ssl_verify", "")),
+        ]:
+            if raw is None or str(raw).strip() == "":
+                continue
+            ssl_verify_raw = raw
+            ssl_verify_src = source
+            break
+        ssl_verify, _ = _parse_bool_flag(ssl_verify_raw)
+        if not ssl_verify_src:
+            ssl_verify_src = "default"
         default_temperature = float(
             cfg.get("evolution.llm.temperature", 0.2)
             or cfg.get("data_provider.strategy_llm_temperature", 0.2)
@@ -224,10 +259,12 @@ class UnifiedLLMConfig:
             retry_times=max(0, int(retry_times or 0)),
             default_temperature=float(default_temperature),
             default_max_tokens=max(64, int(default_max_tokens or 1200)),
+            ssl_verify=bool(ssl_verify),
             provider_source=provider_source,
             api_key_source=api_key_source,
             base_url_source=base_url_source,
             model_source=model_source,
+            ssl_verify_source=str(ssl_verify_src or ""),
         )
 
     def is_ready(self) -> bool:
@@ -251,6 +288,15 @@ class UnifiedLLMClient:
         self.cfg = cfg
         # 记录最后一次调用元数据，便于排障与看板展示。
         self.last_call_meta: Dict[str, Any] = {}
+
+    def _build_ssl_context(self) -> Optional[ssl.SSLContext]:
+        # ssl_verify=False 时跳过证书校验，便于通过自签名/内网代理访问 LLM。
+        if self.cfg.ssl_verify:
+            return None
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
 
     def complete(
         self,
@@ -338,7 +384,7 @@ class UnifiedLLMClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.cfg.timeout_seconds) as resp:
+            with urllib.request.urlopen(req, timeout=self.cfg.timeout_seconds, context=self._build_ssl_context()) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore") if exc.fp else str(exc)
@@ -413,7 +459,7 @@ class UnifiedLLMClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.cfg.timeout_seconds) as resp:
+            with urllib.request.urlopen(req, timeout=self.cfg.timeout_seconds, context=self._build_ssl_context()) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore") if exc.fp else str(exc)
